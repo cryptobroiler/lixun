@@ -4,6 +4,55 @@ use anyhow::Result;
 use lupa_core::{Action, Category, DocId, Document};
 use rusqlite::{Connection, OpenFlags};
 use std::path::PathBuf;
+use std::time::Duration;
+
+/// Retry a fallible operation with bounded backoff for "busy" errors.
+/// Generic over error type and classifier for testability.
+fn with_busy_retry_generic<T, E, F, C>(backoffs: &[Duration], classify: C, mut f: F) -> Result<T, E>
+where
+    F: FnMut() -> Result<T, E>,
+    C: Fn(&E) -> bool,
+{
+    let mut last_err = None;
+    for i in 0..=backoffs.len() {
+        match f() {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                if !classify(&e) {
+                    return Err(e);
+                }
+                last_err = Some(e);
+                if i < backoffs.len() {
+                    std::thread::sleep(backoffs[i]);
+                }
+            }
+        }
+    }
+    Err(last_err.unwrap())
+}
+
+/// Classify rusqlite errors as "busy" (DATABASE_BUSY or DATABASE_LOCKED).
+fn is_busy(e: &rusqlite::Error) -> bool {
+    matches!(e, rusqlite::Error::SqliteFailure(ffi, _)
+        if ffi.code == rusqlite::ErrorCode::DatabaseBusy
+        || ffi.code == rusqlite::ErrorCode::DatabaseLocked)
+}
+
+/// Concrete retry helper for rusqlite operations with default backoffs.
+fn with_busy_retry<T, F>(mut f: F) -> rusqlite::Result<T>
+where
+    F: FnMut() -> rusqlite::Result<T>,
+{
+    with_busy_retry_generic(
+        &[
+            Duration::from_millis(100),
+            Duration::from_millis(500),
+            Duration::from_millis(2000),
+        ],
+        is_busy,
+        &mut f,
+    )
+}
 
 pub struct GlodaSource {
     pub profile_path: PathBuf,
@@ -35,13 +84,14 @@ impl GlodaSource {
         }
     }
 
-    fn open_db(&self) -> Result<Connection> {
+    fn open_db(&self) -> rusqlite::Result<Connection> {
         let db_path = self.profile_path.join("global-messages-db.sqlite");
-        let conn = Connection::open_with_flags(
-            &db_path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        Ok(conn)
+        with_busy_retry(|| {
+            Connection::open_with_flags(
+                &db_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+        })
     }
 }
 
@@ -119,10 +169,26 @@ impl crate::Source for GlodaSource {
             return Ok(Vec::new());
         }
 
-        let conn = self.open_db()?;
-        let docs = query_messages(&conn, self.last_key)?;
-        tracing::info!("Gloda: indexed {} messages", docs.len());
-        Ok(docs)
+        let result: rusqlite::Result<Vec<Document>> = with_busy_retry(|| {
+            let conn = self.open_db()?;
+            let docs = query_messages(&conn, self.last_key)?;
+            Ok(docs)
+        });
+
+        match result {
+            Ok(docs) => {
+                tracing::info!("Gloda: indexed {} messages", docs.len());
+                Ok(docs)
+            }
+            Err(e) => {
+                if is_busy(&e) {
+                    tracing::warn!("gloda busy after retries; deferring to next poll cycle");
+                    Ok(Vec::new())
+                } else {
+                    Err(e.into())
+                }
+            }
+        }
     }
 }
 
@@ -130,6 +196,8 @@ impl crate::Source for GlodaSource {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     fn setup_schema(conn: &Connection) {
         conn.execute_batch(
@@ -241,5 +309,59 @@ mod tests {
         assert_eq!(strip_angle_brackets("noangles".into()), "noangles");
         assert_eq!(strip_angle_brackets("<unbalanced".into()), "<unbalanced");
         assert_eq!(strip_angle_brackets("".into()), "");
+    }
+
+    #[test]
+    fn retries_on_busy_then_succeeds() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let result: Result<i32, i32> = with_busy_retry_generic(
+            &[Duration::ZERO, Duration::ZERO, Duration::ZERO],
+            |e: &i32| *e == 5,
+            move || {
+                let n = c.fetch_add(1, Ordering::SeqCst);
+                if n < 2 {
+                    Err(5)
+                } else {
+                    Ok(42)
+                }
+            },
+        );
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn non_busy_error_not_retried() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let result: Result<i32, i32> = with_busy_retry_generic(
+            &[Duration::ZERO, Duration::ZERO, Duration::ZERO],
+            |e: &i32| *e == 5,
+            move || {
+                let _ = c.fetch_add(1, Ordering::SeqCst);
+                Err(99)
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), 99);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn all_retries_exhausted() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let result: Result<i32, i32> = with_busy_retry_generic(
+            &[Duration::ZERO, Duration::ZERO, Duration::ZERO],
+            |e: &i32| *e == 5,
+            move || {
+                let _ = c.fetch_add(1, Ordering::SeqCst);
+                Err(5)
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), 5);
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
     }
 }
