@@ -17,3 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 bytes.workspace = true
 tokio-util.workspace = true
+
+[[test]]
+name = "it"
+path = "../../tests/it/main.rs"
