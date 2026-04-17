@@ -13,6 +13,8 @@ use history::ClickHistory;
 use lupa_daemon::config;
 use lupa_daemon::search_service::SearchService;
 
+mod watcher;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -54,7 +56,19 @@ async fn main() -> Result<()> {
     let history = Arc::new(RwLock::new(history));
 
     // Wrap index for SearchService
-    let search = Arc::new(SearchService::new(index));
+    let search = SearchService::new(index);
+
+    // Spawn file watcher in background
+    let watcher_roots = config.roots.clone();
+    let watcher_exclude = config.exclude.clone();
+    let watcher_max_size = config.max_file_size_mb;
+    let watcher_index = search.index();
+
+    tokio::spawn(async move {
+        if let Err(e) = watcher::start(watcher_roots, watcher_exclude, watcher_max_size, watcher_index).await {
+            tracing::error!("Watcher error: {}", e);
+        }
+    });
 
     // Start IPC server
     let socket_path = socket_path();
@@ -78,7 +92,7 @@ async fn main() -> Result<()> {
 
     loop {
         let (stream, _) = listener.accept().await?;
-        let search = Arc::clone(&search);
+        let search = search.clone();
         let history = Arc::clone(&history);
 
         tokio::spawn(async move {
@@ -91,7 +105,7 @@ async fn main() -> Result<()> {
 
 async fn handle_client(
     mut stream: tokio::net::UnixStream,
-    search: Arc<SearchService>,
+    search: SearchService,
     history: Arc<RwLock<ClickHistory>>,
 ) -> anyhow::Result<()> {
     // Read request
@@ -125,7 +139,7 @@ async fn handle_client(
                 Err(e) => Response::Error(e.to_string()),
             }
         }
-        Request::Reindex { paths } => Response::Ok, // TODO
+        Request::Reindex { paths: _ } => Response::Ok, // TODO
         Request::Status => {
             Response::Status {
                 indexed_docs: 0,

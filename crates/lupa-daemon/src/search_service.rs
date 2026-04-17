@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// In-process search service (bypasses IPC for GUI).
+#[derive(Clone)]
 pub struct SearchService {
     index: Arc<RwLock<LupaIndex>>,
 }
@@ -24,5 +25,10 @@ impl SearchService {
             text: query.to_string(),
             limit,
         })
+    }
+
+    /// Returns the shared index for external access (e.g. file watcher).
+    pub fn index(&self) -> Arc<RwLock<LupaIndex>> {
+        Arc::clone(&self.index)
     }
 }
