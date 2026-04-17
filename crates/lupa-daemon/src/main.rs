@@ -1,7 +1,8 @@
 //! lupad — Lupa daemon: IPC server, indexer, filesystem watcher.
 
 use anyhow::Result;
-use std::path::PathBuf;
+
+use lupa_daemon::config;
 
 
 #[tokio::main]
@@ -15,7 +16,7 @@ async fn main() -> Result<()> {
 
     tracing::info!("lupad starting...");
 
-    let config = config::load()?;
+    let config = config::Config::load()?;
     tracing::info!("Config loaded: roots={:?}", config.roots);
 
     // Initialize index

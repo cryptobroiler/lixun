@@ -104,7 +104,7 @@ impl Config {
     }
 }
 
-fn expand_tilde(path: &str) -> PathBuf {
+pub fn expand_tilde(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
         let home = std::env::var("HOME").unwrap_or_default();
         PathBuf::from(home).join(rest)
