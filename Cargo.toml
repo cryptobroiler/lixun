@@ -34,9 +34,9 @@ notify = "7.0"
 walkdir = "2.5"
 
 # Extractors
-pdf-extract = "0.7"
 chardetng = "0.1"
 zip = "2.2"
+rtf-grimoire = "0.2"
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
@@ -47,3 +47,4 @@ bytes = "1.0"
 
 # Concurrency
 rayon = "1.10"
+num_cpus = "1.16"

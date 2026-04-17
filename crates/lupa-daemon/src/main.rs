@@ -10,18 +10,27 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 use futures::StreamExt;
 
+mod cursors;
+mod gloda_poll;
 mod history;
 use history::ClickHistory;
 
 use lupa_daemon::config;
 use lupa_daemon::search_service::SearchService;
+use lupa_sources::Source;
 
+mod source_watcher;
 mod watcher;
 
 #[derive(Debug, Clone, Default)]
 struct IndexStats {
     indexed_docs: u64,
     last_reindex: Option<chrono::DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct GuiState {
+    visible: bool,
 }
 
 fn pid_path() -> std::path::PathBuf {
@@ -73,30 +82,51 @@ async fn main() -> Result<()> {
 
     let sources = config.build_sources()?;
     let stats = Arc::new(RwLock::new(IndexStats::default()));
+    let poll_state_dir = config.state_dir.clone();
+    let state_dir = config.state_dir.clone();
+    let watcher_roots = config.roots.clone();
+    let watcher_exclude = config.exclude.clone();
+    let watcher_max_size = config.max_file_size_mb;
+    let shared_config = Arc::new(config);
+
+    let mut max_gloda_key: u64 = 0;
 
     for source in &sources {
         tracing::info!("Indexing source: {}", source.name());
         let docs = source.index_all()?;
         let mut stats_lock = stats.write().await;
-        for doc in docs {
-            index.upsert(&doc, &mut writer)?;
+        for doc in &docs {
+            index.upsert(doc, &mut writer)?;
             stats_lock.indexed_docs += 1;
+            if let Some(key) = doc.id.0.strip_prefix("mail:") {
+                if let Ok(k) = key.parse::<u64>() {
+                    max_gloda_key = max_gloda_key.max(k);
+                }
+            }
         }
         index.commit(&mut writer)?;
         stats_lock.last_reindex = Some(Utc::now());
         tracing::info!("Source {} done", source.name());
     }
 
+    if max_gloda_key > 0 {
+        let mut cursors = cursors::Cursors::default();
+        cursors.last_gloda_key = max_gloda_key;
+        if let Err(e) = cursors.save(&state_dir) {
+            tracing::warn!("Failed to save initial Gloda cursor: {}", e);
+        }
+        tracing::info!("Gloda cursor saved: last_key={}", max_gloda_key);
+    }
+
     tracing::info!("Total indexed: {}", stats.read().await.indexed_docs);
 
-    let history = ClickHistory::load(&config.state_dir)?;
+    let history = ClickHistory::load(&state_dir)?;
     let history = Arc::new(RwLock::new(history));
+
+    let gui_state = Arc::new(RwLock::new(GuiState::default()));
 
     let search = SearchService::new(index);
 
-    let watcher_roots = config.roots.clone();
-    let watcher_exclude = config.exclude.clone();
-    let watcher_max_size = config.max_file_size_mb;
     let watcher_index = search.index();
 
     tokio::spawn(async move {
@@ -104,6 +134,36 @@ async fn main() -> Result<()> {
             tracing::error!("Watcher error: {}", e);
         }
     });
+
+    if let Some(profile) = lupa_sources::gloda::GlodaSource::find_profile() {
+        let poll_index = search.index();
+        let poll_profile = profile.clone();
+        tokio::spawn(async move {
+            if let Err(e) = gloda_poll::start(poll_profile, poll_state_dir, poll_index).await {
+                tracing::error!("Gloda poll error: {}", e);
+            }
+        });
+        tracing::info!("Gloda poller started (30s interval)");
+
+        let apps = Arc::new(lupa_sources::apps::AppsSource::new());
+        let attachments = Arc::new(lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource::new(profile));
+        let source_index = search.index();
+        tokio::spawn(async move {
+            if let Err(e) = source_watcher::start(apps, Some(attachments), source_index).await {
+                tracing::error!("Source watcher error: {}", e);
+            }
+        });
+        tracing::info!("Apps + attachments watchers started");
+    } else {
+        let apps = Arc::new(lupa_sources::apps::AppsSource::new());
+        let source_index = search.index();
+        tokio::spawn(async move {
+            if let Err(e) = source_watcher::start(apps, None, source_index).await {
+                tracing::error!("Source watcher error: {}", e);
+            }
+        });
+        tracing::info!("Apps watcher started (no Thunderbird profile)");
+    }
 
     let socket_path = socket_path();
     if socket_path.exists() {
@@ -122,8 +182,6 @@ async fn main() -> Result<()> {
         perms.set_mode(0o600);
         std::fs::set_permissions(&socket_path, perms)?;
     }
-
-    let state_dir = config.state_dir.clone();
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
 
@@ -153,9 +211,11 @@ async fn main() -> Result<()> {
                 let search = search.clone();
                 let history = Arc::clone(&history);
                 let stats = Arc::clone(&stats);
+                let gui_state = Arc::clone(&gui_state);
+                let shared_config = Arc::clone(&shared_config);
 
                 tokio::spawn(async move {
-                    if let Err(e) = handle_client(stream, search, history, stats).await {
+                    if let Err(e) = handle_client(stream, search, history, stats, gui_state, shared_config).await {
                         tracing::debug!("Client error: {}", e);
                     }
                 });
@@ -176,11 +236,67 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+async fn do_reindex(
+    search: &SearchService,
+    stats: &Arc<RwLock<IndexStats>>,
+    config: &config::Config,
+    paths: Vec<std::path::PathBuf>,
+) -> Result<usize, anyhow::Error> {
+    let index = search.index();
+    let mut idx = index.write().await;
+    let mut writer = idx.writer(128_000_000)?;
+    let mut count = 0;
+
+    if paths.is_empty() {
+        let sources = config.build_sources()?;
+        for source in &sources {
+            tracing::info!("Reindexing source: {}", source.name());
+            let docs = source.index_all()?;
+            for doc in &docs {
+                idx.upsert(doc, &mut writer)?;
+                count += 1;
+            }
+        }
+    } else {
+        for path in &paths {
+            if path.is_file() {
+                if let Ok(doc) = watcher::index_file(path, config.max_file_size_mb) {
+                    idx.upsert(&doc, &mut writer)?;
+                    count += 1;
+                }
+            } else if path.is_dir() {
+                let source = lupa_sources::fs::FsSource::new(
+                    vec![path.clone()],
+                    config.exclude.clone(),
+                    config.max_file_size_mb,
+                );
+                let docs = source.index_all()?;
+                for doc in &docs {
+                    idx.upsert(doc, &mut writer)?;
+                    count += 1;
+                }
+            }
+        }
+    }
+
+    idx.commit(&mut writer)?;
+    {
+        let mut stats_lock = stats.write().await;
+        stats_lock.indexed_docs += count as u64;
+        stats_lock.last_reindex = Some(Utc::now());
+    }
+
+    tracing::info!("Reindex complete: {} documents processed", count);
+    Ok(count)
+}
+
 async fn handle_client(
     mut stream: tokio::net::UnixStream,
     search: SearchService,
     history: Arc<RwLock<ClickHistory>>,
     stats: Arc<RwLock<IndexStats>>,
+    gui_state: Arc<RwLock<GuiState>>,
+    config: Arc<config::Config>,
 ) -> anyhow::Result<()> {
     let mut header = [0u8; 4];
     stream.read_exact(&mut header).await?;
@@ -205,9 +321,21 @@ async fn handle_client(
     let req: Request = serde_json::from_slice(&buf)?;
 
     let resp = match req {
-        Request::Toggle => Response::Ok,
-        Request::Show => Response::Ok,
-        Request::Hide => Response::Ok,
+        Request::Toggle => {
+            let mut state = gui_state.write().await;
+            state.visible = !state.visible;
+            Response::Visibility { visible: state.visible }
+        }
+        Request::Show => {
+            let mut state = gui_state.write().await;
+            state.visible = true;
+            Response::Visibility { visible: true }
+        }
+        Request::Hide => {
+            let mut state = gui_state.write().await;
+            state.visible = false;
+            Response::Visibility { visible: false }
+        }
         Request::Search { q, limit } => {
             match search.search(&q, limit).await {
                 Ok(mut hits) => {
@@ -221,7 +349,17 @@ async fn handle_client(
                 Err(e) => Response::Error(e.to_string()),
             }
         }
-        Request::Reindex { paths: _ } => Response::Ok,
+        Request::Reindex { paths } => {
+            let result = do_reindex(&search, &stats, &config, paths).await;
+            match result {
+                Ok(_count) => Response::Status {
+                    indexed_docs: stats.read().await.indexed_docs,
+                    last_reindex: stats.read().await.last_reindex,
+                    errors: 0,
+                },
+                Err(e) => Response::Error(format!("Reindex failed: {}", e)),
+            }
+        }
         Request::Status => {
             let stats = stats.read().await;
             Response::Status {

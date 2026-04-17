@@ -6,9 +6,9 @@ use tantivy::{
     collector::TopDocs,
     directory::MmapDirectory,
     doc,
-    query::QueryParser,
+    query::{BooleanQuery, FuzzyTermQuery, Occur, Query as TQuery},
     schema::{Schema, Value, STORED, TEXT},
-    Index, IndexWriter, TantivyDocument,
+    Index, IndexWriter, TantivyDocument, Term,
 };
 
 use lupa_core::{Category, Document, Hit, Query};
@@ -128,15 +128,13 @@ impl LupaIndex {
         Ok(())
     }
 
-    /// Search the index.
+    /// Search the index with fuzzy matching.
     pub fn search(&self, query: &Query) -> Result<Vec<Hit>> {
         let reader = self.index.reader()?;
         let searcher = reader.searcher();
         let s = &self.schema;
 
-        // Build query parser searching across title, body, and id
-        let query_parser = QueryParser::for_index(&self.index, vec![s.title, s.body, s.path]);
-        let query_obj = query_parser.parse_query(&query.text)?;
+        let query_obj = build_fuzzy_query(&query.text, s);
 
         let top_docs = searcher.search(&query_obj, &TopDocs::with_limit(query.limit as usize))?;
 
@@ -215,6 +213,31 @@ impl LupaIndex {
     pub fn writer(&self, heap_size: usize) -> Result<IndexWriter<TantivyDocument>> {
         let writer = self.index.writer(heap_size)?;
         Ok(writer)
+    }
+}
+
+fn build_fuzzy_query(text: &str, s: &LupaSchema) -> Box<dyn TQuery> {
+    let terms: Vec<&str> = text.split_whitespace().collect();
+    if terms.is_empty() {
+        return Box::new(BooleanQuery::new(vec![]));
+    }
+
+    let mut subqueries: Vec<(Occur, Box<dyn TQuery>)> = Vec::new();
+
+    for term in &terms {
+        let distance = if term.len() <= 5 { 1u8 } else { 2u8 };
+
+        for field in [s.title, s.body, s.path] {
+            let t = Term::from_field_text(field, term);
+            let fq = FuzzyTermQuery::new(t, distance, true);
+            subqueries.push((Occur::Should, Box::new(fq)));
+        }
+    }
+
+    if subqueries.len() == 1 {
+        subqueries.pop().unwrap().1
+    } else {
+        Box::new(BooleanQuery::new(subqueries))
     }
 }
 

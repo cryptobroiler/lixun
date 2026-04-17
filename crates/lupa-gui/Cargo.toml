@@ -10,10 +10,13 @@ anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 serde_json.workspace = true
+dirs = "5"
 glib = "0.20"
 gtk = { package = "gtk4", version = "0.9" }
 gtk4-layer-shell = "0.5"
+relm4 = "0.9"
+relm4-components = "0.9"
 
-[[bin]]
-name = "lupa-gui"
-path = "src/main.rs"
+[lib]
+name = "lupa_gui"
+path = "src/lib.rs"

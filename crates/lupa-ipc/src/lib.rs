@@ -34,6 +34,9 @@ pub enum Response {
         last_reindex: Option<DateTime<Utc>>,
         errors: u32,
     },
+    Visibility {
+        visible: bool,
+    },
     Error(String),
 }
 

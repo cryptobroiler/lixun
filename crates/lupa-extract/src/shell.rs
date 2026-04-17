@@ -55,6 +55,18 @@ pub fn extract_ppt(bytes: &[u8], runner: &dyn CommandRunner) -> Result<String> {
     Ok(text)
 }
 
+/// Extract text from PDF using pdftotext (poppler).
+pub fn extract_pdf(bytes: &[u8], runner: &dyn CommandRunner) -> Result<String> {
+    let tmp = write_temp(bytes, "pdf")?;
+    let text = runner.run(
+        "pdftotext",
+        &["-layout", "-enc", "UTF-8", tmp.to_str().unwrap(), "-"],
+        None,
+    )?;
+    let _ = std::fs::remove_file(&tmp);
+    Ok(text)
+}
+
 fn write_temp(bytes: &[u8], ext: &str) -> Result<std::path::PathBuf> {
     let tmp = std::env::temp_dir().join(format!("lupa-shell-{}.{}", std::process::id(), ext));
     std::fs::write(&tmp, bytes)?;

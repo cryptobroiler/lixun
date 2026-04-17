@@ -118,6 +118,9 @@ fn handle_response(resp: Response) {
             println!("Last reindex: {:?}", last_reindex);
             println!("Errors: {}", errors);
         }
+        Response::Visibility { visible } => {
+            println!("{}", if visible { "show" } else { "hide" });
+        }
         Response::Error(msg) => {
             eprintln!("Error: {}", msg);
         }

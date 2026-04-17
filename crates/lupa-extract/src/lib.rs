@@ -14,10 +14,10 @@ pub trait Extractor {
 /// Registry of extractors by extension.
 pub fn extractor_for_ext(ext: &str) -> Option<Box<dyn Extractor>> {
     match ext {
-        "pdf" => None,
+        "pdf" if shell::command_exists("pdftotext") => Some(Box::new(PdfExtractor)),
         "docx" | "xlsx" | "pptx" => Some(Box::new(OoxmlExtractor)),
         "odt" => Some(Box::new(OdtExtractor)),
-        "rtf" => None,
+        "rtf" => Some(Box::new(RtfExtractor)),
         "doc" if shell::command_exists("antiword") => Some(Box::new(ShellDocExtractor)),
         "xls" if shell::command_exists("catdoc") => Some(Box::new(ShellXlsExtractor)),
         "ppt" if shell::command_exists("libreoffice") => Some(Box::new(ShellPptExtractor)),
@@ -70,13 +70,7 @@ pub struct PdfExtractor;
 
 impl Extractor for PdfExtractor {
     fn extract(&self, bytes: &[u8]) -> Result<String> {
-        // pdf-extract works with paths; write to temp file
-        let tmp = std::env::temp_dir().join(format!("lupa-pdf-{}.pdf", std::process::id()));
-        std::fs::write(&tmp, bytes)?;
-        let text = pdf_extract::extract_text(&tmp)
-            .map_err(|e| anyhow::anyhow!("PDF extraction: {}", e))?;
-        let _ = std::fs::remove_file(&tmp);
-        Ok(text)
+        shell::extract_pdf(bytes, &shell::SystemRunner)
     }
 
     fn mime_types(&self) -> &'static [&'static str] {
@@ -161,6 +155,51 @@ impl Extractor for OdtExtractor {
 
     fn mime_types(&self) -> &'static [&'static str] {
         &["application/vnd.oasis.opendocument.text"]
+    }
+}
+
+// --- RTF ---
+
+pub struct RtfExtractor;
+
+impl Extractor for RtfExtractor {
+    fn extract(&self, bytes: &[u8]) -> Result<String> {
+        let (_, tokens) = rtf_grimoire::tokenizer::parse(bytes)
+            .map_err(|e| anyhow::anyhow!("RTF parse error: {:?}", e))?;
+
+        let mut text_bytes: Vec<u8> = Vec::new();
+        for token in &tokens {
+            match token {
+                rtf_grimoire::tokenizer::Token::Text(data) => {
+                    text_bytes.extend_from_slice(data);
+                }
+                rtf_grimoire::tokenizer::Token::ControlWord { name, .. } if name == "par" => {
+                    text_bytes.push(b'\n');
+                }
+                rtf_grimoire::tokenizer::Token::ControlWord { name, .. } if name == "line" => {
+                    text_bytes.push(b'\n');
+                }
+                rtf_grimoire::tokenizer::Token::ControlSymbol('~') => {
+                    text_bytes.push(b' ');
+                }
+                rtf_grimoire::tokenizer::Token::Newline(data) => {
+                    text_bytes.extend_from_slice(data);
+                }
+                _ => {}
+            }
+        }
+
+        // Try UTF-8 first, fallback to latin-1 (common RTF encoding)
+        if let Ok(text) = String::from_utf8(text_bytes.clone()) {
+            return Ok(text.trim().to_string());
+        }
+        // latin-1: each byte maps directly to Unicode code point U+0000..U+00FF
+        let text: String = text_bytes.into_iter().map(|b| b as char).collect();
+        Ok(text.trim().to_string())
+    }
+
+    fn mime_types(&self) -> &'static [&'static str] {
+        &["application/rtf"]
     }
 }
 

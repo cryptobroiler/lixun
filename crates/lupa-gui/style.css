@@ -1,0 +1,94 @@
+/* Lupa — Spotlight-like launcher for Linux */
+/* Dark theme with translucent background */
+
+/* Main window */
+.lupa-window {
+    background: rgba(30, 30, 35, 0.85);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4),
+                0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Search entry */
+.lupa-entry {
+    font-size: 28px;
+    padding: 14px 20px;
+    background-color: rgba(20, 20, 25, 0.9);
+    color: #e0e0e0;
+    border: none;
+    border-radius: 8px;
+}
+
+.lupa-entry placeholder {
+    color: #666666;
+}
+
+/* Results container */
+.lupa-results {
+    background-color: transparent;
+}
+
+/* Hit row */
+.lupa-hit {
+    padding: 8px 16px;
+    border-radius: 6px;
+    transition: background-color 0.12s ease;
+}
+
+.lupa-hit:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+.lupa-hit:selected {
+    background-color: rgba(100, 140, 255, 0.15);
+}
+
+/* Title label */
+.lupa-title {
+    font-weight: bold;
+    color: #f0f0f0;
+}
+
+/* Subtitle label */
+.lupa-subtitle {
+    color: #888888;
+    font-size: 12px;
+}
+
+/* Badge label */
+.lupa-badge {
+    color: #666666;
+    font-size: 10px;
+    font-weight: normal;
+}
+
+/* Fade+slide transition */
+@keyframes lupa-fade-slide-in {
+    from {
+        opacity: 0;
+        transform: translateY(-12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes lupa-fade-slide-out {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+    }
+    to {
+        opacity: 0;
+        transform: translateY(-12px);
+    }
+}
+
+.lupa-showing {
+    animation: lupa-fade-slide-in 120ms ease-out;
+}
+
+.lupa-hiding {
+    animation: lupa-fade-slide-out 120ms ease-in;
+}

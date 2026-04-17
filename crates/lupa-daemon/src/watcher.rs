@@ -119,7 +119,7 @@ fn should_exclude(path: &str, exclude: &[String]) -> bool {
     false
 }
 
-fn index_file(path: &std::path::Path, max_file_size_mb: u64) -> Result<Document> {
+pub fn index_file(path: &std::path::Path, max_file_size_mb: u64) -> Result<Document> {
     let path_str = path.to_string_lossy().to_string();
     let filename = path.file_name()
         .map(|n| n.to_string_lossy().to_string())
