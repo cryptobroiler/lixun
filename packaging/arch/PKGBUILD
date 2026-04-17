@@ -13,7 +13,12 @@ md5sums=("SKIP")
 
 pkgver() {
   cd "$pkgname"
-  git describe --tags --long 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' || echo "0.1.0"
+  local ver
+  ver=$(git describe --tags --long 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g') || ver=""
+  if [ -z "$ver" ]; then
+    ver="0.1.0.r$(git rev-list --count HEAD).g$(git rev-parse --short HEAD)"
+  fi
+  echo "$ver"
 }
 
 build() {
