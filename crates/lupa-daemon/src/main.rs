@@ -3,8 +3,6 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
-mod config;
-mod search_service;
 
 #[tokio::main]
 async fn main() -> Result<()> {

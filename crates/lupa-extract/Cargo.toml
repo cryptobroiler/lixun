@@ -8,3 +8,5 @@ anyhow.workspace = true
 pdf-extract.workspace = true
 chardetng.workspace = true
 zip.workspace = true
+which = "6"
+tempfile = "3"

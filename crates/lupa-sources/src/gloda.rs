@@ -2,28 +2,23 @@
 
 use anyhow::Result;
 use lupa_core::{Action, Category, DocId, Document};
+use rusqlite::{Connection, OpenFlags};
 use std::path::PathBuf;
 
-/// Gloda mail source.
 pub struct GlodaSource {
     pub profile_path: PathBuf,
     pub last_key: u64,
 }
 
 impl GlodaSource {
-    /// Try to find the Thunderbird profile.
     pub fn find_profile() -> Option<PathBuf> {
         let home = std::env::var("HOME").ok()?;
         let tb_path = PathBuf::from(&home).join(".thunderbird");
-
-        if !tb_path.exists() {
-            return None;
-        }
-
+        if !tb_path.exists() { return None; }
         for entry in std::fs::read_dir(&tb_path).ok()? {
             if let Ok(entry) = entry {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name.ends_with(".default") || name.ends_with(".default-release") || name.contains(".default") {
+                if name.contains(".default") {
                     return Some(entry.path());
                 }
             }
@@ -34,37 +29,65 @@ impl GlodaSource {
     pub fn new(profile_path: PathBuf, last_key: u64) -> Self {
         Self { profile_path, last_key }
     }
+
+    fn open_db(&self) -> Result<Connection> {
+        let db_path = self.profile_path.join("global-messages-db.sqlite");
+        let conn = Connection::open_with_flags(
+            &db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        Ok(conn)
+    }
 }
 
 impl crate::Source for GlodaSource {
-    fn name(&self) -> &'static str {
-        "gloda"
-    }
+    fn name(&self) -> &'static str { "gloda" }
 
     fn index_all(&self) -> Result<Vec<Document>> {
         let db_path = self.profile_path.join("global-messages-db.sqlite");
-
         if !db_path.exists() {
-            tracing::warn!("Gloda database not found at {:?}", db_path);
+            tracing::warn!("Gloda DB not found at {:?}", db_path);
             return Ok(Vec::new());
         }
 
+        let conn = self.open_db()?;
+        let mut stmt = conn.prepare(
+            "SELECT m.id, m.subject, m.author, m.message_key, mt.content
+             FROM messages m
+             LEFT JOIN messagesText_content mt ON m.id = mt.id
+             WHERE m.id > ?
+             ORDER BY m.id ASC
+             LIMIT 10000"
+        )?;
+
+        let rows = stmt.query_map([self.last_key], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1).unwrap_or_default(),
+                row.get::<_, String>(2).unwrap_or_default(),
+                row.get::<_, String>(3).unwrap_or_default(),
+                row.get::<_, String>(4).unwrap_or_default(),
+            ))
+        })?;
+
         let mut docs = Vec::new();
+        for row in rows {
+            let (id, subject, author, message_key, body) = row?;
+            docs.push(Document {
+                id: DocId(format!("mail:{}", id)),
+                category: Category::Mail,
+                title: subject.clone(),
+                subtitle: author.clone(),
+                body: if body.is_empty() { None } else { Some(body) },
+                path: format!("thunderbird:{}", id),
+                mtime: 0,
+                size: 0,
+                action: Action::OpenMail { message_id: message_key },
+                extract_fail: false,
+            });
+        }
 
-        // We'd use rusqlite here; for now, stub with a simple query
-        // In the full implementation:
-        // let conn = rusqlite::Connection::open_with_flags(
-        //     &db_path,
-        //     rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        // )?;
-        //
-        // Query: SELECT m.id, m.subject, m.author, mt.content FROM messages m
-        //   JOIN messagesText_content mt ON m.id = mt.id
-        //   WHERE m.id > ? ORDER BY m.id LIMIT 1000
-
-        // Placeholder — will be implemented with rusqlite in the daemon
-        tracing::info!("Gloda: source available, would index from {:?}", db_path);
-
+        tracing::info!("Gloda: indexed {} messages", docs.len());
         Ok(docs)
     }
 }
