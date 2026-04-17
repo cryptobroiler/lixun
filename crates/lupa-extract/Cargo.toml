@@ -1,11 +1,10 @@
 [package]
 name = "lupa-extract"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-anyhow = "1.0"
-pdf-extract = "0.7"
-zip = "2.2"
-chardetng = "0.1"
-quick-xml = "0.36"
+anyhow.workspace = true
+pdf-extract.workspace = true
+chardetng.workspace = true
+zip.workspace = true

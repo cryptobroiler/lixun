@@ -1,5 +1,123 @@
-// TODO: implement CLI
+//! lupa — thin CLI client for the Lupa daemon.
 
-fn main() {
-    println!("lupa-cli placeholder");
+use anyhow::{Context, Result};
+use bytes::{BufMut, BytesMut};
+use clap::{Parser, Subcommand};
+use lupa_ipc::{Request, Response};
+use std::path::PathBuf;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixStream;
+
+#[derive(Parser)]
+#[command(name = "lupa", about = "Spotlight-like launcher for Linux")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Toggle the launcher window.
+    Toggle,
+    /// Show the launcher window.
+    Show,
+    /// Hide the launcher window.
+    Hide,
+    /// Search (for CLI usage, not GUI).
+    Search {
+        query: String,
+        #[arg(short, long, default_value_t = 20)]
+        limit: u32,
+    },
+    /// Trigger a reindex.
+    Reindex {
+        #[arg(num_args = 1..)]
+        paths: Vec<PathBuf>,
+    },
+    /// Show daemon status.
+    Status,
+}
+
+async fn send_request(req: Request) -> Result<Response> {
+    let socket_path = lupa_ipc::socket_path();
+
+    let mut stream = UnixStream::connect(&socket_path)
+        .await
+        .context(format!(
+            "lupad not running; start with: systemctl --user start lupad\n(socket: {:?})",
+            socket_path
+        ))?;
+
+    // Encode request
+    let json = serde_json::to_vec(&req)?;
+    let len = json.len() as u32;
+    let mut buf = BytesMut::with_capacity(4 + json.len());
+    buf.put_u32(len);
+    buf.put_slice(&json);
+    stream.write_all(&buf).await?;
+
+    // Read response header (4 bytes)
+    let mut header = [0u8; 4];
+    stream.read_exact(&mut header).await?;
+    let resp_len = u32::from_be_bytes(header) as usize;
+
+    // Read response body
+    let mut resp_buf = vec![0u8; resp_len];
+    stream.read_exact(&mut resp_buf).await?;
+
+    let resp: Response = serde_json::from_slice(&resp_buf)?;
+    Ok(resp)
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Toggle => {
+            let resp = send_request(Request::Toggle).await?;
+            handle_response(resp);
+        }
+        Commands::Show => {
+            let resp = send_request(Request::Show).await?;
+            handle_response(resp);
+        }
+        Commands::Hide => {
+            let resp = send_request(Request::Hide).await?;
+            handle_response(resp);
+        }
+        Commands::Search { query, limit } => {
+            let resp = send_request(Request::Search { q: query, limit }).await?;
+            handle_response(resp);
+        }
+        Commands::Reindex { paths } => {
+            let resp = send_request(Request::Reindex { paths }).await?;
+            handle_response(resp);
+        }
+        Commands::Status => {
+            let resp = send_request(Request::Status).await?;
+            handle_response(resp);
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_response(resp: Response) {
+    match resp {
+        Response::Ok => {}
+        Response::Hits(hits) => {
+            for hit in hits {
+                println!("{:.2} | {:?} | {} | {}", hit.score, hit.category, hit.title, hit.subtitle);
+            }
+        }
+        Response::Status { indexed_docs, last_reindex, errors } => {
+            println!("Indexed documents: {}", indexed_docs);
+            println!("Last reindex: {:?}", last_reindex);
+            println!("Errors: {}", errors);
+        }
+        Response::Error(msg) => {
+            eprintln!("Error: {}", msg);
+        }
+    }
 }

@@ -1,10 +1,13 @@
 [package]
 name = "lupa-ipc"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 lupa-core = { path = "../lupa-core" }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tokio = { version = "1", features = ["net", "io-util"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["codec"] }
+bytes.workspace = true
+chrono.workspace = true

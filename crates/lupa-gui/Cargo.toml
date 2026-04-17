@@ -1,11 +1,8 @@
 [package]
 name = "lupa-gui"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-lupa-core = { path = "../lupa-core" }
-anyhow = "1.0"
-gtk4 = "0.9"
-relm4 = "0.9"
-# gtk4-layer-shell — будет добавлен когда установим libgtk-layer-shell-dev
+anyhow.workspace = true
+tracing.workspace = true
