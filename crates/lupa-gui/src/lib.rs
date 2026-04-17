@@ -133,6 +133,45 @@ fn send_record_click(doc_id: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// File manager integration
+// ---------------------------------------------------------------------------
+
+pub(crate) fn file_uri(abs: &std::path::Path) -> String {
+    let mut out = String::from("file://");
+    let s = abs.to_string_lossy();
+    let mut first = true;
+    for seg in s.split('/') {
+        if !first {
+            out.push('/');
+        }
+        first = false;
+        for b in seg.bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    out.push(b as char)
+                }
+                _ => out.push_str(&format!("%{b:02X}")),
+            }
+        }
+    }
+    out
+}
+
+fn show_in_file_manager(path: &std::path::Path) -> Result<()> {
+    let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let uri = file_uri(&abs);
+    let conn = zbus::blocking::Connection::session()?;
+    let _ = conn.call_method(
+        Some("org.freedesktop.FileManager1"),
+        "/org/freedesktop/FileManager1",
+        Some("org.freedesktop.FileManager1"),
+        "ShowItems",
+        &(vec![uri.as_str()], ""),
+    )?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Execute action
 // ---------------------------------------------------------------------------
 
@@ -169,15 +208,24 @@ fn execute_action(hit: &Hit) -> Result<()> {
         Action::ShowInFileManager { path } => {
             if path.is_dir() {
                 std::process::Command::new("xdg-open").arg(path).spawn()?;
-            } else if let Some(parent) = path.parent() {
-                std::process::Command::new("xdg-open").arg(parent).spawn()?;
+            } else {
+                match show_in_file_manager(path) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        tracing::debug!(
+                            "FileManager1 DBus call failed: {e}; falling back to xdg-open"
+                        );
+                        if let Some(parent) = path.parent() {
+                            std::process::Command::new("xdg-open").arg(parent).spawn()?;
+                        }
+                    }
+                }
             }
             Ok(())
         }
         Action::OpenMail { message_id } => {
             std::process::Command::new("thunderbird")
-                .arg("-mail")
-                .arg("-messageid")
+                .arg("-message")
                 .arg(message_id)
                 .spawn()?;
             Ok(())
@@ -204,8 +252,7 @@ fn execute_action(hit: &Hit) -> Result<()> {
         }
         Action::OpenParentMail { message_id } => {
             std::process::Command::new("thunderbird")
-                .arg("-mail")
-                .arg("-messageid")
+                .arg("-message")
                 .arg(message_id)
                 .spawn()?;
             Ok(())
@@ -216,13 +263,26 @@ fn execute_action(hit: &Hit) -> Result<()> {
 fn execute_secondary_action(hit: &Hit) -> Result<()> {
     match &hit.action {
         Action::ShowInFileManager { path } => {
-            std::process::Command::new("xdg-open").arg(path).spawn()?;
+            if path.is_dir() {
+                std::process::Command::new("xdg-open").arg(path).spawn()?;
+            } else {
+                match show_in_file_manager(path) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        tracing::debug!(
+                            "FileManager1 DBus call failed: {e}; falling back to xdg-open"
+                        );
+                        if let Some(parent) = path.parent() {
+                            std::process::Command::new("xdg-open").arg(parent).spawn()?;
+                        }
+                    }
+                }
+            }
             Ok(())
         }
         Action::OpenParentMail { message_id } => {
             std::process::Command::new("thunderbird")
-                .arg("-mail")
-                .arg("-messageid")
+                .arg("-message")
                 .arg(message_id)
                 .spawn()?;
             Ok(())
@@ -666,4 +726,39 @@ fn animate_hide(window: &gtk::ApplicationWindow) {
         window_weak.hide();
         window_weak.remove_css_class("lupa-hiding");
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::file_uri;
+    use std::path::Path;
+
+    #[test]
+    fn test_file_uri_ascii() {
+        assert_eq!(file_uri(Path::new("/tmp/foo.txt")), "file:///tmp/foo.txt");
+    }
+
+    #[test]
+    fn test_file_uri_spaces() {
+        assert_eq!(
+            file_uri(Path::new("/tmp/hello world.txt")),
+            "file:///tmp/hello%20world.txt"
+        );
+    }
+
+    #[test]
+    fn test_file_uri_utf8() {
+        assert_eq!(
+            file_uri(Path::new("/home/u/Café.pdf")),
+            "file:///home/u/Caf%C3%A9.pdf"
+        );
+    }
+
+    #[test]
+    fn test_file_uri_preserves_separators() {
+        let result = file_uri(Path::new("/a/b/c/d/e.txt"));
+        assert!(!result.contains("%2F"));
+        assert!(!result.contains("%2f"));
+        assert_eq!(result, "file:///a/b/c/d/e.txt");
+    }
 }
