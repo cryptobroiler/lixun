@@ -6,7 +6,9 @@ members = [
     "crates/lupa-extract",
     "crates/lupa-sources",
     "crates/lupa-daemon",
-    "crates/lupa-gui",
     "crates/lupa-cli",
 ]
+# lupa-gui excluded — requires GTK4 dev libraries
+# add to workspace when building on a machine with GTK4 installed
+exclude = ["crates/lupa-gui"]
 resolver = "2"
