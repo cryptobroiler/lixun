@@ -82,6 +82,12 @@ pub struct Hit {
     pub extract_fail: bool,
 }
 
+impl Default for Action {
+    fn default() -> Self {
+        Action::OpenFile { path: PathBuf::new() }
+    }
+}
+
 // ── Query ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
