@@ -5,8 +5,10 @@ use lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource;
 use lupa_sources::Source;
 use notify::{Config, Event, RecursiveMode, Watcher as NotifyWatcher};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+
+const REINDEX_COOLDOWN: Duration = Duration::from_secs(30);
 
 pub async fn start(
     apps_source: Arc<AppsSource>,
@@ -44,7 +46,10 @@ pub async fn start(
         }
     }
 
-    let debounce_ms = 1000;
+    let debounce_ms = 2000;
+    let mut last_apps_reindex: Option<Instant> = None;
+    let mut last_attachments_reindex: Option<Instant> = None;
+
     loop {
         let mut events = Vec::new();
         if let Some(event) = rx.recv().await {
@@ -67,8 +72,17 @@ pub async fn start(
         });
 
         if has_app_events {
-            if let Err(e) = reindex_apps(&apps_source, &index).await {
-                tracing::error!("Apps reindex error: {}", e);
+            let cooldown_expired = last_apps_reindex
+                .map(|t| t.elapsed() >= REINDEX_COOLDOWN)
+                .unwrap_or(true);
+
+            if cooldown_expired {
+                if let Err(e) = reindex_apps(&apps_source, &index).await {
+                    tracing::error!("Apps reindex error: {}", e);
+                }
+                last_apps_reindex = Some(Instant::now());
+            } else {
+                tracing::debug!("Apps reindex skipped (cooldown active)");
             }
         }
 
@@ -80,8 +94,17 @@ pub async fn start(
             });
 
             if has_mbox_events {
-                if let Err(e) = reindex_attachments(&attachments_source.as_ref().unwrap(), &index).await {
-                    tracing::error!("Attachments reindex error: {}", e);
+                let cooldown_expired = last_attachments_reindex
+                    .map(|t| t.elapsed() >= REINDEX_COOLDOWN)
+                    .unwrap_or(true);
+
+                if cooldown_expired {
+                    if let Err(e) = reindex_attachments(&attachments_source.as_ref().unwrap(), &index).await {
+                        tracing::error!("Attachments reindex error: {}", e);
+                    }
+                    last_attachments_reindex = Some(Instant::now());
+                } else {
+                    tracing::debug!("Attachments reindex skipped (cooldown active)");
                 }
             }
         }
