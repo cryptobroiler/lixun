@@ -26,7 +26,7 @@ impl FsSource {
         self.exclude.iter().any(|pat| name == pat.as_str())
     }
 
-    fn extract_content(path: &Path) -> Result<Option<String>> {
+    pub fn extract_content(path: &Path) -> Result<Option<String>> {
         let text = lupa_extract::extract_path(path)?;
         if text.is_empty() {
             return Ok(None);
