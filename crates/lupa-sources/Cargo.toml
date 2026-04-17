@@ -16,6 +16,8 @@ serde.workspace = true
 serde_json.workspace = true
 rusqlite = { version = "0.31", features = ["bundled"] }
 mailparse = "0.15"
+base64 = "0.22"
+quoted_printable = "0.5"
 
 [dev-dependencies]
 tempfile.workspace = true

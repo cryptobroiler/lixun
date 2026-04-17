@@ -122,7 +122,10 @@ impl Config {
                 0,
             )));
             sources.push(Box::new(
-                lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource::new(profile),
+                lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource::new(
+                    profile,
+                    self.max_file_size_mb * 1024 * 1024,
+                ),
             ));
         }
 

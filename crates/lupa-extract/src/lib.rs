@@ -101,6 +101,22 @@ pub(crate) fn extractor_for_ext_with_caps(
     }
 }
 
+/// Extract text from raw bytes using an optional extension hint.
+pub fn extract_bytes(bytes: &[u8], ext_hint: Option<&str>) -> Result<String> {
+    let caps = capabilities();
+    let ext = ext_hint.unwrap_or("").to_ascii_lowercase();
+
+    if let Some(extractor) = extractor_for_ext_with_caps(&ext, &caps) {
+        return extractor.extract(bytes);
+    }
+
+    if !bytes.contains(&0) && let Ok(text) = std::str::from_utf8(bytes) {
+        return Ok(text.to_string());
+    }
+
+    Ok(String::new())
+}
+
 /// Try to extract text from a file path.
 pub fn extract_path(path: &Path) -> Result<String> {
     let ext = path

@@ -58,6 +58,8 @@ pub enum Action {
         byte_offset: u64,
         length: u64,
         mime: String,
+        encoding: String,
+        suggested_filename: String,
     },
     /// Open the parent mail for an attachment.
     OpenParentMail { message_id: String },
@@ -156,6 +158,8 @@ mod tests {
                 byte_offset: 100,
                 length: 500,
                 mime: "application/pdf".to_string(),
+                encoding: "base64".to_string(),
+                suggested_filename: "test.pdf".to_string(),
             },
         ];
 
@@ -184,18 +188,24 @@ mod tests {
                         byte_offset: bo1,
                         length: l1,
                         mime: mi1,
+                        encoding: en1,
+                        suggested_filename: sf1,
                     },
                     Action::OpenAttachment {
                         mbox_path: mb2,
                         byte_offset: bo2,
                         length: l2,
                         mime: mi2,
+                        encoding: en2,
+                        suggested_filename: sf2,
                     },
                 ) => {
                     assert_eq!(mb1, mb2);
                     assert_eq!(bo1, bo2);
                     assert_eq!(l1, l2);
                     assert_eq!(mi1, mi2);
+                    assert_eq!(en1, en2);
+                    assert_eq!(sf1, sf2);
                 }
                 _ => panic!("Action variant mismatch"),
             }

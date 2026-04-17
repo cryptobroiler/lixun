@@ -3,6 +3,7 @@
 pub mod apps;
 pub mod fs;
 pub mod gloda;
+pub mod mbox;
 pub mod manifest;
 pub mod thunderbird_attachments;
 

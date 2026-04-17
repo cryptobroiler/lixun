@@ -235,6 +235,8 @@ fn execute_action(hit: &Hit) -> Result<()> {
             byte_offset,
             length,
             mime: _,
+            encoding: _,
+            suggested_filename: _,
         } => {
             let tmp = std::env::temp_dir().join(format!(
                 "lupa-att-{}-{}",

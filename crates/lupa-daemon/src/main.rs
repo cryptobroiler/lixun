@@ -137,7 +137,12 @@ async fn main() -> Result<()> {
         tracing::info!("Gloda poller started (30s interval)");
 
         let apps = Arc::new(lupa_sources::apps::AppsSource::new());
-        let attachments = Arc::new(lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource::new(profile));
+        let attachments = Arc::new(
+            lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource::new(
+                profile,
+                shared_config.max_file_size_mb * 1024 * 1024,
+            ),
+        );
         let source_index = search.index();
         tokio::spawn(async move {
             if let Err(e) = source_watcher::start(apps, Some(attachments), source_index).await {
