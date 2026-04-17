@@ -22,6 +22,7 @@ pub enum Request {
     Search { q: String, limit: u32 },
     Reindex { paths: Vec<PathBuf> },
     Status,
+    RecordClick { doc_id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,13 +37,14 @@ pub enum Response {
     Error(String),
 }
 
-/// Framing codec: u32 BE length + JSON payload.
+/// Framing codec: u32 BE length + u16 version + JSON payload.
 pub struct FrameCodec {
     state: DecodeState,
 }
 
 enum DecodeState {
     Header,
+    Version(usize),
     Payload(usize),
 }
 
@@ -58,9 +60,11 @@ impl Encoder<Request> for FrameCodec {
     type Error = std::io::Error;
 
     fn encode(&mut self, item: Request, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        let json = serde_json::to_vec(&item).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        let len = json.len() as u32;
-        dst.put_u32(len);
+        let json = serde_json::to_vec(&item)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let total_len = 2 + json.len();
+        dst.put_u32(total_len as u32);
+        dst.put_u16(PROTOCOL_VERSION);
         dst.put_slice(&json);
         Ok(())
     }
@@ -78,7 +82,29 @@ impl Decoder for FrameCodec {
                         return Ok(None);
                     }
                     let len = src.get_u32() as usize;
-                    self.state = DecodeState::Payload(len);
+                    if len < 2 {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "frame too short for version",
+                        ));
+                    }
+                    self.state = DecodeState::Version(len);
+                }
+                DecodeState::Version(len) => {
+                    if src.len() < 2 {
+                        return Ok(None);
+                    }
+                    let version = src.get_u16();
+                    if version != PROTOCOL_VERSION {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!(
+                                "version mismatch: expected {}, got {}",
+                                PROTOCOL_VERSION, version
+                            ),
+                        ));
+                    }
+                    self.state = DecodeState::Payload(len - 2);
                 }
                 DecodeState::Payload(len) => {
                     if src.len() < len {
@@ -97,10 +123,37 @@ impl Decoder for FrameCodec {
 
 /// Determine the socket path.
 pub fn socket_path() -> PathBuf {
-    let uid = std::process::id();
+    let uid = get_uid();
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         let path = PathBuf::from(runtime_dir).join("lupa.sock");
         return path;
     }
     PathBuf::from(format!("/tmp/lupa-{}.sock", uid))
+}
+
+fn get_uid() -> u32 {
+    // Try UID environment variable first (set by login/systemd)
+    if let Ok(uid) = std::env::var("UID") {
+        if let Ok(uid) = uid.parse::<u32>() {
+            return uid;
+        }
+    }
+    // Fallback: read from /proc (Linux-specific)
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("Uid:") {
+                if let Ok(uid) = rest
+                    .trim()
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("0")
+                    .parse::<u32>()
+                {
+                    return uid;
+                }
+            }
+        }
+    }
+    // Last resort fallback
+    1000
 }

@@ -7,7 +7,7 @@ use tantivy::{
     directory::MmapDirectory,
     doc,
     query::QueryParser,
-    schema::{Schema, STORED, TEXT, Value},
+    schema::{Schema, Value, STORED, TEXT},
     Index, IndexWriter, TantivyDocument,
 };
 
@@ -71,19 +71,27 @@ impl LupaIndex {
     pub fn create_or_open(index_path: &str) -> Result<Self> {
         let schema = LupaSchema::build();
 
-        let index = if Path::new(index_path).exists() {
+        let index = if Path::new(index_path).join("meta.json").exists() {
             Index::open_in_dir(index_path)?
         } else {
             std::fs::create_dir_all(index_path)?;
             let dir = MmapDirectory::open(index_path)?;
-            Index::create(dir, schema.schema.clone(), tantivy::IndexSettings::default())?
+            Index::create(
+                dir,
+                schema.schema.clone(),
+                tantivy::IndexSettings::default(),
+            )?
         };
 
         Ok(Self { index, schema })
     }
 
     /// Upsert a document (delete by id, then insert).
-    pub fn upsert(&mut self, doc: &Document, writer: &mut IndexWriter<TantivyDocument>) -> Result<()> {
+    pub fn upsert(
+        &mut self,
+        doc: &Document,
+        writer: &mut IndexWriter<TantivyDocument>,
+    ) -> Result<()> {
         let s = &self.schema;
 
         // Delete old
@@ -110,7 +118,11 @@ impl LupaIndex {
     }
 
     /// Delete a document by id.
-    pub fn delete_by_id(&mut self, id: &str, writer: &mut IndexWriter<TantivyDocument>) -> Result<()> {
+    pub fn delete_by_id(
+        &mut self,
+        id: &str,
+        writer: &mut IndexWriter<TantivyDocument>,
+    ) -> Result<()> {
         let term = tantivy::Term::from_field_text(self.schema.id, id);
         writer.delete_term(term);
         Ok(())
@@ -123,16 +135,10 @@ impl LupaIndex {
         let s = &self.schema;
 
         // Build query parser searching across title, body, and id
-        let query_parser = QueryParser::for_index(
-            &self.index,
-            vec![s.title, s.body, s.path],
-        );
+        let query_parser = QueryParser::for_index(&self.index, vec![s.title, s.body, s.path]);
         let query_obj = query_parser.parse_query(&query.text)?;
 
-        let top_docs = searcher.search(
-            &query_obj,
-            &TopDocs::with_limit(query.limit as usize),
-        )?;
+        let top_docs = searcher.search(&query_obj, &TopDocs::with_limit(query.limit as usize))?;
 
         let mut results = Vec::new();
         for (score, doc_address) in top_docs {
@@ -215,7 +221,6 @@ impl LupaIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     #[test]
     fn test_create_and_search() {
@@ -223,7 +228,7 @@ mod tests {
         let path = tmp.path().to_str().unwrap();
 
         let mut index = LupaIndex::create_or_open(path).unwrap();
-        let mut writer = index.writer(10_000_000).unwrap();
+        let mut writer = index.writer(20_000_000).unwrap();
 
         let doc = Document {
             id: lupa_core::DocId("fs:/tmp/test.txt".to_string()),
@@ -234,17 +239,21 @@ mod tests {
             path: "/tmp/test.txt".to_string(),
             mtime: 0,
             size: 100,
-            action: lupa_core::Action::OpenFile { path: "/tmp/test.txt".into() },
+            action: lupa_core::Action::OpenFile {
+                path: "/tmp/test.txt".into(),
+            },
             extract_fail: false,
         };
 
         index.upsert(&doc, &mut writer).unwrap();
         index.commit(&mut writer).unwrap();
 
-        let results = index.search(&Query {
-            text: "hello".to_string(),
-            limit: 10,
-        }).unwrap();
+        let results = index
+            .search(&Query {
+                text: "hello".to_string(),
+                limit: 10,
+            })
+            .unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "test.txt");

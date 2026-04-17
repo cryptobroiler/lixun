@@ -7,9 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
 
-use lupa_sources::fs::FsSource;
-use lupa_sources::Source;
-
 /// Debounced file watcher that keeps the index in sync.
 pub async fn start(
     roots: Vec<PathBuf>,
@@ -17,19 +14,6 @@ pub async fn start(
     max_file_size_mb: u64,
     index: Arc<RwLock<LupaIndex>>,
 ) -> Result<()> {
-    // Initial index
-    {
-        let mut idx = index.write().await;
-        let mut writer = idx.writer(128_000_000)?;
-        let source = FsSource::new(roots.clone(), exclude.clone(), max_file_size_mb);
-        let docs = source.index_all()?;
-        for doc in docs {
-            idx.upsert(&doc, &mut writer)?;
-        }
-        idx.commit(&mut writer)?;
-        tracing::info!("Initial indexing complete: {} roots", roots.len());
-    }
-
     // Set up debounced channel
     let (tx, mut rx) = mpsc::channel::<Event>(1000);
 
@@ -74,21 +58,6 @@ pub async fn start(
 
         for event in events {
             match event.kind {
-                EventKind::Create(_) | EventKind::Modify(_) => {
-                    for path in &event.paths {
-                        if path.is_file() {
-                            let path_str = path.to_string_lossy();
-                            // Check exclusion
-                            if should_exclude(&path_str, &exclude) {
-                                continue;
-                            }
-                            if let Ok(doc) = index_file(path, max_file_size_mb) {
-                                idx.upsert(&doc, &mut writer)?;
-                                changes += 1;
-                            }
-                        }
-                    }
-                }
                 EventKind::Remove(_) => {
                     for path in &event.paths {
                         let id = format!("fs:{}", path.to_string_lossy());
@@ -100,11 +69,29 @@ pub async fn start(
                     for path in &event.paths {
                         let id = format!("fs:{}", path.to_string_lossy());
                         idx.delete_by_id(&id, &mut writer)?;
+                        changes += 1;
                     }
                 }
                 EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::To)) => {
                     for path in &event.paths {
                         if path.is_file() {
+                            let path_str = path.to_string_lossy();
+                            if !should_exclude(&path_str, &exclude) {
+                                if let Ok(doc) = index_file(path, max_file_size_mb) {
+                                    idx.upsert(&doc, &mut writer)?;
+                                    changes += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                EventKind::Create(_) | EventKind::Modify(_) => {
+                    for path in &event.paths {
+                        if path.is_file() {
+                            let path_str = path.to_string_lossy();
+                            if should_exclude(&path_str, &exclude) {
+                                continue;
+                            }
                             if let Ok(doc) = index_file(path, max_file_size_mb) {
                                 idx.upsert(&doc, &mut writer)?;
                                 changes += 1;

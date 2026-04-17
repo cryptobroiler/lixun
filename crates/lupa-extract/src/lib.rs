@@ -3,6 +3,8 @@
 use anyhow::Result;
 use std::path::Path;
 
+pub mod shell;
+
 /// Extractor trait: takes bytes, returns text.
 pub trait Extractor {
     fn extract(&self, bytes: &[u8]) -> Result<String>;
@@ -12,13 +14,13 @@ pub trait Extractor {
 /// Registry of extractors by extension.
 pub fn extractor_for_ext(ext: &str) -> Option<Box<dyn Extractor>> {
     match ext {
-        "pdf" => Some(Box::new(PdfExtractor)),
+        "pdf" => None,
         "docx" | "xlsx" | "pptx" => Some(Box::new(OoxmlExtractor)),
         "odt" => Some(Box::new(OdtExtractor)),
-        "rtf" => None, // rtf-grimoire later
-        "doc" => None,  // antiword later
-        "xls" => None,  // catdoc later
-        "ppt" => None,  // libreoffice later
+        "rtf" => None,
+        "doc" if shell::command_exists("antiword") => Some(Box::new(ShellDocExtractor)),
+        "xls" if shell::command_exists("catdoc") => Some(Box::new(ShellXlsExtractor)),
+        "ppt" if shell::command_exists("libreoffice") => Some(Box::new(ShellPptExtractor)),
         _ => None,
     }
 }
@@ -32,15 +34,20 @@ pub fn extract_path(path: &Path) -> Result<String> {
 
     if let Some(extractor) = extractor_for_ext(&ext) {
         let bytes = std::fs::read(path)?;
-        return extractor.extract(&bytes);
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| extractor.extract(&bytes)));
+        return match result {
+            Ok(Ok(text)) => Ok(text),
+            Ok(Err(e)) => Err(e),
+            Err(_) => anyhow::bail!("extractor panicked"),
+        };
     }
 
     // Text-like: try encoding detection
     match ext.as_str() {
-        "txt" | "md" | "log" | "csv" | "json" | "xml" | "html" | "htm"
-        | "yaml" | "yml" | "toml" | "ini" | "cfg" | "rs" | "py" | "js"
-        | "ts" | "c" | "h" | "cpp" | "hpp" | "java" | "go" | "sh"
-        | "css" | "scss" | "sql" | "rb" => extract_text_file(path),
+        "txt" | "md" | "log" | "csv" | "json" | "xml" | "html" | "htm" | "yaml" | "yml"
+        | "toml" | "ini" | "cfg" | "rs" | "py" | "js" | "ts" | "c" | "h" | "cpp" | "hpp"
+        | "java" | "go" | "sh" | "css" | "scss" | "sql" | "rb" => extract_text_file(path),
         _ => Ok(String::new()),
     }
 }
@@ -66,7 +73,8 @@ impl Extractor for PdfExtractor {
         // pdf-extract works with paths; write to temp file
         let tmp = std::env::temp_dir().join(format!("lupa-pdf-{}.pdf", std::process::id()));
         std::fs::write(&tmp, bytes)?;
-        let text = pdf_extract::extract_text(&tmp).map_err(|e| anyhow::anyhow!("PDF extraction: {}", e))?;
+        let text = pdf_extract::extract_text(&tmp)
+            .map_err(|e| anyhow::anyhow!("PDF extraction: {}", e))?;
         let _ = std::fs::remove_file(&tmp);
         Ok(text)
     }
@@ -143,7 +151,8 @@ impl Extractor for OdtExtractor {
     fn extract(&self, bytes: &[u8]) -> Result<String> {
         let cursor = std::io::Cursor::new(bytes);
         let mut archive = zip::ZipArchive::new(cursor)?;
-        let mut file = archive.by_name("content.xml")
+        let mut file = archive
+            .by_name("content.xml")
             .map_err(|_| anyhow::anyhow!("ODT: content.xml not found"))?;
         let mut content = String::new();
         std::io::Read::read_to_string(&mut file, &mut content)?;
@@ -152,6 +161,39 @@ impl Extractor for OdtExtractor {
 
     fn mime_types(&self) -> &'static [&'static str] {
         &["application/vnd.oasis.opendocument.text"]
+    }
+}
+
+pub struct ShellDocExtractor;
+
+impl Extractor for ShellDocExtractor {
+    fn extract(&self, bytes: &[u8]) -> Result<String> {
+        shell::extract_doc(bytes, &shell::SystemRunner)
+    }
+    fn mime_types(&self) -> &'static [&'static str] {
+        &["application/msword"]
+    }
+}
+
+pub struct ShellXlsExtractor;
+
+impl Extractor for ShellXlsExtractor {
+    fn extract(&self, bytes: &[u8]) -> Result<String> {
+        shell::extract_xls(bytes, &shell::SystemRunner)
+    }
+    fn mime_types(&self) -> &'static [&'static str] {
+        &["application/vnd.ms-excel"]
+    }
+}
+
+pub struct ShellPptExtractor;
+
+impl Extractor for ShellPptExtractor {
+    fn extract(&self, bytes: &[u8]) -> Result<String> {
+        shell::extract_ppt(bytes, &shell::SystemRunner)
+    }
+    fn mime_types(&self) -> &'static [&'static str] {
+        &["application/vnd.ms-powerpoint"]
     }
 }
 
@@ -175,6 +217,9 @@ mod tests {
 
     #[test]
     fn test_strip_xml_tags() {
-        assert_eq!(strip_xml_tags("<root>hello <b>world</b></root>"), "hello world");
+        assert_eq!(
+            strip_xml_tags("<root>hello <b>world</b></root>"),
+            "hello world"
+        );
     }
 }

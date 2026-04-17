@@ -9,13 +9,15 @@ pub struct SystemRunner;
 
 impl CommandRunner for SystemRunner {
     fn run(&self, cmd: &str, args: &[&str], _input: Option<&[u8]>) -> Result<String> {
-        let output = Command::new(cmd)
-            .args(args)
-            .output()?;
+        let output = Command::new(cmd).args(args).output()?;
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
         } else {
-            anyhow::bail!("{} failed: {}", cmd, String::from_utf8_lossy(&output.stderr));
+            anyhow::bail!(
+                "{} failed: {}",
+                cmd,
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
     }
 }
@@ -44,14 +46,13 @@ pub fn extract_xls(bytes: &[u8], runner: &dyn CommandRunner) -> Result<String> {
 /// Extract text from PPT using libreoffice --headless --cat.
 pub fn extract_ppt(bytes: &[u8], runner: &dyn CommandRunner) -> Result<String> {
     let tmp = write_temp(bytes, "ppt")?;
-    let _out = tempfile::NamedTempFile::new()?;
-    runner.run("libreoffice", &[
-        "--headless", "--cat",
-        tmp.to_str().unwrap(),
-    ], None)?;
-    // libreoffice --cat outputs to stdout
+    let text = runner.run(
+        "libreoffice",
+        &["--headless", "--cat", tmp.to_str().unwrap()],
+        None,
+    )?;
     let _ = std::fs::remove_file(&tmp);
-    Ok(String::new()) // Would need to capture stdout
+    Ok(text)
 }
 
 fn write_temp(bytes: &[u8], ext: &str) -> Result<std::path::PathBuf> {

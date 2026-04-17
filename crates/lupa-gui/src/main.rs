@@ -4,105 +4,131 @@
 //! and provides a Spotlight-like search interface.
 
 use std::cell::RefCell;
-use std::sync::{Arc, Mutex};
+use std::io::{Read, Write};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Instant;
 
 use glib::clone;
 use gtk::prelude::*;
 use gtk4_layer_shell::LayerShell;
 use lupa_core::{Action, Category, Hit};
-use lupa_ipc::{socket_path, Request, Response};
+use lupa_ipc::{socket_path, Request, Response, PROTOCOL_VERSION};
 
 use anyhow::Result;
 
 // ---------------------------------------------------------------------------
-// IPC helpers
+// IPC client — background thread with sync UnixStream
 // ---------------------------------------------------------------------------
 
-async fn read_message<R>(reader: &mut R) -> std::io::Result<Vec<u8>>
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    use tokio::io::AsyncReadExt;
-    let mut header = [0u8; 4];
-    reader.read_exact(&mut header).await?;
-    let len = u32::from_be_bytes(header) as usize;
-    let mut buf = vec![0u8; len];
-    reader.read_exact(&mut buf).await?;
-    Ok(buf)
+struct IpcClient {
+    request_tx: mpsc::Sender<(String, u32)>,
+    responses: Arc<Mutex<Vec<Hit>>>,
 }
 
-async fn write_message<W>(writer: &mut W, payload: &[u8]) -> std::io::Result<()>
-where
-    W: tokio::io::AsyncWrite + Unpin,
-{
-    use tokio::io::AsyncWriteExt;
-    let len = payload.len() as u32;
-    let mut header = [0u8; 4];
-    header.copy_from_slice(&len.to_be_bytes());
-    writer.write_all(&header).await?;
-    writer.write_all(payload).await?;
-    writer.flush().await?;
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// IPC
-// ---------------------------------------------------------------------------
-
-async fn run_ipc_loop(
-    mut search_rx: tokio::sync::mpsc::Receiver<String>,
-    shared_responses: Arc<Mutex<Vec<Response>>>,
-) {
-    let sock = socket_path();
-    let stream = match tokio::net::UnixStream::connect(&sock).await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("Failed to connect to daemon at {:?}: {}", sock, e);
-            return;
+impl Clone for IpcClient {
+    fn clone(&self) -> Self {
+        Self {
+            request_tx: self.request_tx.clone(),
+            responses: Arc::clone(&self.responses),
         }
-    };
+    }
+}
 
-    let (mut reader, mut writer) = stream.into_split();
+fn start_ipc_thread() -> IpcClient {
+    let (tx, rx) = mpsc::channel::<(String, u32)>();
+    let responses: Arc<Mutex<Vec<Hit>>> = Arc::new(Mutex::new(Vec::new()));
+    let resp_clone = Arc::clone(&responses);
 
-    let shared_for_reader = Arc::clone(&shared_responses);
-    tokio::spawn(async move {
-        loop {
-            match read_message(&mut reader).await {
-                Ok(buf) => {
-                    match serde_json::from_slice::<Response>(&buf) {
-                        Ok(resp) => {
-                            if let Ok(mut responses) = shared_for_reader.lock() {
-                                responses.push(resp);
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to parse response: {}", e);
-                        }
+    std::thread::spawn(move || {
+        while let Ok((query, limit)) = rx.recv() {
+            let sock = socket_path();
+            let req = Request::Search { q: query, limit };
+            let json = match serde_json::to_vec(&req) {
+                Ok(j) => j,
+                Err(e) => {
+                    tracing::error!("Failed to serialize search request: {}", e);
+                    continue;
+                }
+            };
+            let total_len = (2 + json.len()) as u32;
+            let mut buf = Vec::with_capacity(4 + 2 + json.len());
+            buf.extend_from_slice(&total_len.to_be_bytes());
+            buf.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+            buf.extend_from_slice(&json);
+
+            let mut stream = match std::os::unix::net::UnixStream::connect(&sock) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!("Failed to connect to daemon at {:?}: {}", sock, e);
+                    continue;
+                }
+            };
+
+            if let Err(e) = stream.write_all(&buf) {
+                tracing::error!("Failed to send search request: {}", e);
+                continue;
+            }
+
+            let mut header = [0u8; 4];
+            if let Err(e) = stream.read_exact(&mut header) {
+                tracing::error!("Failed to read response header: {}", e);
+                continue;
+            }
+            let resp_len = u32::from_be_bytes(header) as usize;
+            if resp_len < 2 {
+                tracing::error!("Response frame too short");
+                continue;
+            }
+            let mut _version = [0u8; 2];
+            if let Err(e) = stream.read_exact(&mut _version) {
+                tracing::error!("Failed to read response version: {}", e);
+                continue;
+            }
+            let mut resp_buf = vec![0u8; resp_len - 2];
+            if let Err(e) = stream.read_exact(&mut resp_buf) {
+                tracing::error!("Failed to read response body: {}", e);
+                continue;
+            }
+
+            match serde_json::from_slice::<Response>(&resp_buf) {
+                Ok(Response::Hits(hits)) => {
+                    if let Ok(mut r) = resp_clone.lock() {
+                        *r = hits;
                     }
                 }
+                Ok(Response::Error(msg)) => {
+                    tracing::error!("Daemon error: {}", msg);
+                }
+                Ok(_) => {}
                 Err(e) => {
-                    tracing::error!("Failed to read from daemon: {}", e);
-                    break;
+                    tracing::error!("Failed to parse response: {}", e);
                 }
             }
         }
     });
 
-    while let Some(query) = search_rx.recv().await {
-        let req = Request::Search {
-            q: query,
-            limit: 20,
-        };
-        let json = match serde_json::to_vec(&req) {
-            Ok(j) => j,
-            Err(e) => {
-                tracing::error!("Failed to serialize request: {}", e);
-                continue;
-            }
-        };
-        if let Err(e) = write_message(&mut writer, &json).await {
-            tracing::error!("Failed to send request to daemon: {}", e);
-        }
+    IpcClient {
+        request_tx: tx,
+        responses,
+    }
+}
+
+fn send_record_click(doc_id: &str) {
+    let sock = socket_path();
+    let req = Request::RecordClick {
+        doc_id: doc_id.to_string(),
+    };
+    let Ok(json) = serde_json::to_vec(&req) else {
+        return;
+    };
+    let total_len = (2 + json.len()) as u32;
+    let mut buf = Vec::with_capacity(4 + 2 + json.len());
+    buf.extend_from_slice(&total_len.to_be_bytes());
+    buf.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+    buf.extend_from_slice(&json);
+
+    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&sock) {
+        let _ = stream.write_all(&buf);
     }
 }
 
@@ -112,11 +138,17 @@ async fn run_ipc_loop(
 
 fn execute_action(hit: &Hit) -> Result<()> {
     match &hit.action {
-        Action::Launch { exec, terminal, working_dir } => {
+        Action::Launch {
+            exec,
+            terminal,
+            working_dir,
+        } => {
             if *terminal {
                 let mut args: Vec<&str> = vec!["-e"];
                 args.extend(exec.split_whitespace());
-                std::process::Command::new("alacritty").args(&args).spawn()?;
+                std::process::Command::new("alacritty")
+                    .args(&args)
+                    .spawn()?;
             } else {
                 let mut parts = exec.split_whitespace();
                 if let Some(cmd) = parts.next() {
@@ -315,15 +347,7 @@ pub fn run() -> Result<()> {
 }
 
 fn build_window(app: &gtk::Application) -> Result<()> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let _rt = runtime.enter();
-
-    let (search_tx, search_rx) = tokio::sync::mpsc::channel::<String>(32);
-    let shared_responses: Arc<Mutex<Vec<Response>>> = Arc::new(Mutex::new(Vec::new()));
-    let shared_for_ipc = Arc::clone(&shared_responses);
-    let _ipc = runtime.spawn(run_ipc_loop(search_rx, shared_for_ipc));
+    let ipc = start_ipc_thread();
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -393,71 +417,67 @@ fn build_window(app: &gtk::Application) -> Result<()> {
 
     // Poll responses
     let model2 = model.clone();
-    let shared_for_poll = Arc::clone(&shared_responses);
+    let responses = Arc::clone(&ipc.responses);
     glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-        let mut responses = shared_for_poll.lock().unwrap();
-        for resp in responses.drain(..) {
-            if let Response::Hits(hits) = resp {
-                update_results(&model2, &hits);
-            }
+        let mut hits = responses.lock().unwrap();
+        if !hits.is_empty() {
+            let snapshot = std::mem::take(&mut *hits);
+            update_results(&model2, &snapshot);
         }
         glib::ControlFlow::Continue
     });
 
-    // Debounced search
-    let (debounce_tx, debounce_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let search_tx2 = search_tx.clone();
-    runtime.spawn(async move { let mut debounce_rx = debounce_rx;
-        use tokio::time::{Duration, Instant};
-        let mut last_change = Instant::now();
-        let mut pending = String::new();
-        loop {
-            let deadline = last_change + Duration::from_millis(40);
-            tokio::select! {
-                Some(text) = debounce_rx.recv() => {
-                    pending = text;
-                    last_change = Instant::now();
-                }
-                _ = tokio::time::sleep_until(deadline) => {
-                    if !pending.is_empty() {
-                        let _ = search_tx2.send(pending.clone()).await;
-                        pending.clear();
-                    }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-            }
+    // Debounce
+    let debounce_state: Arc<Mutex<(String, Instant)>> =
+        Arc::new(Mutex::new((String::new(), Instant::now())));
+    let ipc_for_debounce = ipc.clone();
+    let debounce_state_for_timeout = Arc::clone(&debounce_state);
+    glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
+        let mut state = debounce_state_for_timeout.lock().unwrap();
+        if !state.0.is_empty() && state.1.elapsed() >= std::time::Duration::from_millis(40) {
+            let _ = ipc_for_debounce.request_tx.send((state.0.clone(), 30));
+            state.0.clear();
         }
+        glib::ControlFlow::Continue
     });
+    let debounce_state_for_entry = Arc::clone(&debounce_state);
     entry.connect_changed(move |e| {
-        let _ = debounce_tx.send(e.text().to_string());
+        let mut state = debounce_state_for_entry.lock().unwrap();
+        state.0 = e.text().to_string();
+        state.1 = Instant::now();
     });
 
     // Keyboard nav
     let key_controller = gtk::EventControllerKey::new();
-    key_controller.connect_key_pressed(clone!(@strong selection => move |_, key, _, _| {
-        match key {
-            gtk::gdk::Key::Up => {
-                let current = selection.selected();
-                if current > 0 {
-                    selection.set_selected(current - 1);
+    key_controller.connect_key_pressed(
+        clone!(@strong selection, @strong window => move |_, key, _, _| {
+            match key {
+                gtk::gdk::Key::Up => {
+                    let current = selection.selected();
+                    if current > 0 {
+                        selection.set_selected(current - 1);
+                    }
+                    glib::signal::Propagation::Stop
                 }
-                glib::signal::Propagation::Stop
-            }
-            gtk::gdk::Key::Down => {
-                let current = selection.selected();
-                let n = selection.n_items();
-                if current + 1 < n {
-                    selection.set_selected(current + 1);
+                gtk::gdk::Key::Down => {
+                    let current = selection.selected();
+                    let n = selection.n_items();
+                    if current + 1 < n {
+                        selection.set_selected(current + 1);
+                    }
+                    glib::signal::Propagation::Stop
                 }
-                glib::signal::Propagation::Stop
+                gtk::gdk::Key::Escape => {
+                    window.hide();
+                    glib::signal::Propagation::Stop
+                }
+                _ => glib::signal::Propagation::Proceed,
             }
-            gtk::gdk::Key::Escape => glib::signal::Propagation::Stop,
-            _ => glib::signal::Propagation::Proceed,
-        }
-    }));
+        }),
+    );
     list_view.add_controller(key_controller);
 
-    // Enter -> execute
+    // Enter
     entry.connect_activate(clone!(@strong selection, @strong model => move |_| {
         let idx = selection.selected();
         if let Some(item) = model.item(idx) {
@@ -465,6 +485,7 @@ fn build_window(app: &gtk::Application) -> Result<()> {
                 let doc_id = str_obj.string().to_string();
                 with_cached_hits(|hits| {
                     if let Some(hit) = hits.iter().find(|h| h.id.0 == doc_id) {
+                        send_record_click(&hit.id.0);
                         if let Err(e) = execute_action(hit) {
                             tracing::error!("Failed to execute action: {}", e);
                         }
@@ -489,11 +510,11 @@ fn build_window(app: &gtk::Application) -> Result<()> {
     if sock.exists() {
         let req = Request::Toggle;
         if let Ok(json) = serde_json::to_vec(&req) {
-            let len = json.len() as u32;
+            let total_len = (2 + json.len()) as u32;
             let _ = std::os::unix::net::UnixStream::connect(&sock).and_then(|mut s| {
-                use std::io::Write;
-                let mut buf = Vec::with_capacity(4 + json.len());
-                buf.extend_from_slice(&len.to_be_bytes());
+                let mut buf = Vec::with_capacity(4 + 2 + json.len());
+                buf.extend_from_slice(&total_len.to_be_bytes());
+                buf.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
                 buf.extend_from_slice(&json);
                 s.write_all(&buf)
             });

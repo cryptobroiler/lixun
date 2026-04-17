@@ -7,7 +7,6 @@ edition.workspace = true
 lupa-core = { path = "../lupa-core" }
 lupa-ipc = { path = "../lupa-ipc" }
 anyhow.workspace = true
-tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 serde_json.workspace = true

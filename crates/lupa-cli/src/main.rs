@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use bytes::{BufMut, BytesMut};
 use clap::{Parser, Subcommand};
-use lupa_ipc::{Request, Response};
+use lupa_ipc::{Request, Response, PROTOCOL_VERSION};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -48,21 +48,23 @@ async fn send_request(req: Request) -> Result<Response> {
             socket_path
         ))?;
 
-    // Encode request
     let json = serde_json::to_vec(&req)?;
-    let len = json.len() as u32;
-    let mut buf = BytesMut::with_capacity(4 + json.len());
-    buf.put_u32(len);
+    let total_len = (2 + json.len()) as u32;
+    let mut buf = BytesMut::with_capacity(4 + 2 + json.len());
+    buf.put_u32(total_len);
+    buf.put_u16(PROTOCOL_VERSION);
     buf.put_slice(&json);
     stream.write_all(&buf).await?;
 
-    // Read response header (4 bytes)
     let mut header = [0u8; 4];
     stream.read_exact(&mut header).await?;
     let resp_len = u32::from_be_bytes(header) as usize;
-
-    // Read response body
-    let mut resp_buf = vec![0u8; resp_len];
+    if resp_len < 2 {
+        return anyhow::bail!("response frame too short");
+    }
+    let mut version_buf = [0u8; 2];
+    stream.read_exact(&mut version_buf).await?;
+    let mut resp_buf = vec![0u8; resp_len - 2];
     stream.read_exact(&mut resp_buf).await?;
 
     let resp: Response = serde_json::from_slice(&resp_buf)?;
