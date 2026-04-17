@@ -1,3 +1,4 @@
+# Maintainer: Шабилиск <shabi@dkp.hk>
 pkgname=lupa
 pkgver=0.1.0
 pkgrel=1
@@ -7,17 +8,24 @@ url="https://repo.dkp.hk/denis/lupa"
 license=("MIT")
 depends=("gtk4" "libadwaita" "gtk4-layer-shell")
 makedepends=("rust" "cargo")
-source=("${pkgname}-${pkgver}.tar.gz::https://repo.dkp.hk/denis/lupa/archive/v${pkgver}.tar.gz")
-sha256sums=("SKIP")
+source=("lupa::git+https://repo.dkp.hk/denis/lupa.git#branch=lupa-spotlight")
+md5sums=("SKIP")
+
+pkgver() {
+  cd "$pkgname"
+  git describe --tags --long 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' || echo "0.1.0"
+}
 
 build() {
-  cd "${srcdir}/${pkgname}-${pkgver}"
+  cd "$pkgname"
   cargo build --release
 }
 
 package() {
-  install -Dm755 "target/release/lupad" "${pkgdir}/usr/bin/lupad"
-  install -Dm755 "target/release/lupa" "${pkgdir}/usr/bin/lupa"
-  install -Dm644 "packaging/systemd/lupad.service" "${pkgdir}/usr/lib/systemd/user/lupad.service"
-  install -Dm644 "packaging/desktop/lupa.desktop" "${pkgdir}/usr/share/applications/lupa.desktop"
+  cd "$pkgname"
+  install -Dm755 "target/release/lupad" "$pkgdir/usr/bin/lupad"
+  install -Dm755 "target/release/lupa" "$pkgdir/usr/bin/lupa"
+  install -Dm755 "target/release/lupa-gui" "$pkgdir/usr/bin/lupa-gui"
+  install -Dm644 "packaging/systemd/lupad.service" "$pkgdir/usr/lib/systemd/user/lupad.service"
+  install -Dm644 "packaging/desktop/lupa.desktop" "$pkgdir/usr/share/applications/lupa.desktop"
 }
