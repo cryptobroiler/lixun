@@ -1,18 +1,23 @@
 # Maintainer: Шабилиск <shabi@dkp.hk>
-pkgname=lupa
+pkgname=lupa-bin
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Spotlight-like launcher for Linux"
+pkgdesc="Spotlight-like launcher for Linux (pre-built binary)"
 arch=("x86_64")
 url="https://repo.dkp.hk/denis/lupa"
 license=("MIT")
-depends=("gtk4" "libadwaita" "gtk4-layer-shell")
-makedepends=("rust" "cargo")
-source=("lupa::git+https://repo.dkp.hk/denis/lupa.git#branch=lupa-spotlight")
+depends=("gtk4" "gtk4-layer-shell" "poppler" "zstd" "sqlite")
+optdepends=("antiword: .doc extraction"
+            "catdoc: .doc extraction"
+            "libreoffice-fresh: .docx/.xlsx/.pptx extraction")
+makedepends=("rust" "cargo" "gcc" "pkg-config" "sqlite" "zstd")
+provides=("lupa")
+conflicts=("lupa")
+source=("lupa::git+https://repo.dkp.hk/denis/lupa.git#branch=critical-bugfixes")
 md5sums=("SKIP")
 
 pkgver() {
-  cd "$pkgname"
+  cd "lupa"
   local ver
   ver=$(git describe --tags --long 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g') || ver=""
   if [ -z "$ver" ]; then
@@ -22,12 +27,16 @@ pkgver() {
 }
 
 build() {
-  cd "$pkgname"
+  cd "lupa"
+  export RUSTUP_TOOLCHAIN=stable
+  export CC=gcc
+  unset CFLAGS CXXFLAGS LDFLAGS
+  rm -rf target
   cargo build --release
 }
 
 package() {
-  cd "$pkgname"
+  cd "lupa"
   install -Dm755 "target/release/lupad" "$pkgdir/usr/bin/lupad"
   install -Dm755 "target/release/lupa" "$pkgdir/usr/bin/lupa"
   install -Dm755 "target/release/lupa-gui" "$pkgdir/usr/bin/lupa-gui"

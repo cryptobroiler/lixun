@@ -14,7 +14,9 @@ impl GlodaSource {
     pub fn find_profile() -> Option<PathBuf> {
         let home = std::env::var("HOME").ok()?;
         let tb_path = PathBuf::from(&home).join(".thunderbird");
-        if !tb_path.exists() { return None; }
+        if !tb_path.exists() {
+            return None;
+        }
         for entry in std::fs::read_dir(&tb_path).ok()? {
             if let Ok(entry) = entry {
                 let name = entry.file_name().to_string_lossy().to_string();
@@ -27,7 +29,10 @@ impl GlodaSource {
     }
 
     pub fn new(profile_path: PathBuf, last_key: u64) -> Self {
-        Self { profile_path, last_key }
+        Self {
+            profile_path,
+            last_key,
+        }
     }
 
     fn open_db(&self) -> Result<Connection> {
@@ -41,7 +46,9 @@ impl GlodaSource {
 }
 
 impl crate::Source for GlodaSource {
-    fn name(&self) -> &'static str { "gloda" }
+    fn name(&self) -> &'static str {
+        "gloda"
+    }
 
     fn index_all(&self) -> Result<Vec<Document>> {
         let db_path = self.profile_path.join("global-messages-db.sqlite");
@@ -57,7 +64,7 @@ impl crate::Source for GlodaSource {
              LEFT JOIN messagesText_content mt ON m.id = mt.id
              WHERE m.id > ?
              ORDER BY m.id ASC
-             LIMIT 10000"
+             LIMIT 10000",
         )?;
 
         let rows = stmt.query_map([self.last_key], |row| {
@@ -82,7 +89,9 @@ impl crate::Source for GlodaSource {
                 path: format!("thunderbird:{}", id),
                 mtime: 0,
                 size: 0,
-                action: Action::OpenMail { message_id: message_key },
+                action: Action::OpenMail {
+                    message_id: message_key,
+                },
                 extract_fail: false,
             });
         }

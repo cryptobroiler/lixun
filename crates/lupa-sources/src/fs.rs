@@ -9,6 +9,7 @@ use lupa_core::{Action, Category, DocId, Document};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 
+use crate::manifest::Manifest;
 use lupa_extract;
 
 /// Filesystem source configuration.
@@ -154,5 +155,126 @@ impl crate::Source for FsSource {
             extract_fails
         );
         Ok(docs)
+    }
+}
+
+impl FsSource {
+    pub fn index_incremental(
+        &self,
+        manifest: &mut Manifest,
+    ) -> Result<(Vec<Document>, Vec<String>)> {
+        let max_size = self.max_file_size_mb * 1024 * 1024;
+
+        let mut current_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut changed_metas: Vec<FileMeta> = Vec::new();
+
+        for root in &self.roots {
+            for entry in walkdir::WalkDir::new(root)
+                .into_iter()
+                .filter_entry(|e| !self.should_exclude(e.file_name().to_string_lossy().as_ref()))
+                .filter_map(|e| e.ok())
+            {
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+
+                let path = entry.path();
+                let Ok(metadata) = std::fs::metadata(path) else {
+                    continue;
+                };
+
+                let mtime = metadata
+                    .modified()
+                    .map(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs() as i64)
+                            .unwrap_or(0)
+                    })
+                    .unwrap_or(0);
+
+                let path_str = path.to_string_lossy().to_string();
+                current_files.insert(path_str.clone());
+
+                if manifest.is_unchanged(&path_str, mtime) {
+                    continue;
+                }
+
+                changed_metas.push(FileMeta {
+                    path: path.to_path_buf(),
+                    path_str,
+                    filename: path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                    mtime,
+                    size: metadata.len(),
+                });
+            }
+        }
+
+        let deleted_ids: Vec<String> = manifest
+            .known_paths()
+            .filter(|p| !current_files.contains(*p))
+            .map(|p| format!("fs:{}", p))
+            .collect();
+
+        for path in &deleted_ids {
+            manifest.remove(path.strip_prefix("fs:").unwrap());
+        }
+
+        if changed_metas.is_empty() && deleted_ids.is_empty() {
+            tracing::info!("Filesystem: no changes detected");
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        tracing::info!(
+            "Filesystem: {} changed/new files, {} deleted, extracting in parallel...",
+            changed_metas.len(),
+            deleted_ids.len()
+        );
+
+        let pool = Self::build_pool();
+        let docs: Vec<Document> = pool.install(|| {
+            changed_metas
+                .into_par_iter()
+                .map(|meta| {
+                    let (body, extract_fail) = if meta.size <= max_size {
+                        match Self::extract_content(&meta.path) {
+                            Ok(Some(text)) => (Some(text), false),
+                            Ok(None) => (None, false),
+                            Err(_) => (None, true),
+                        }
+                    } else {
+                        (None, false)
+                    };
+
+                    Document {
+                        id: DocId(format!("fs:{}", meta.path_str)),
+                        category: Category::File,
+                        title: meta.filename,
+                        subtitle: meta.path_str.clone(),
+                        body,
+                        path: meta.path_str,
+                        mtime: meta.mtime,
+                        size: meta.size,
+                        action: Action::OpenFile { path: meta.path },
+                        extract_fail,
+                    }
+                })
+                .collect()
+        });
+
+        for doc in &docs {
+            manifest.update(doc.path.clone(), doc.mtime);
+        }
+
+        let extract_fails = docs.iter().filter(|d| d.extract_fail).count();
+        tracing::info!(
+            "Filesystem incremental: {} docs indexed, {} deleted ({} extract failures)",
+            docs.len(),
+            deleted_ids.len(),
+            extract_fails
+        );
+        Ok((docs, deleted_ids))
     }
 }

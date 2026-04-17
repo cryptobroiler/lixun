@@ -64,7 +64,8 @@ impl AppsSource {
                     "Exec" => {
                         exec = val.trim().to_string();
                         // Remove field codes (%f, %F, %u, etc.)
-                        exec = exec.split_whitespace()
+                        exec = exec
+                            .split_whitespace()
                             .filter(|s| !s.starts_with('%'))
                             .collect::<Vec<_>>()
                             .join(" ");
@@ -109,7 +110,9 @@ impl crate::Source for AppsSource {
                     continue;
                 }
 
-                if let Some((desktop_id, name, exec, terminal, working_dir)) = Self::parse_desktop_file(&path) {
+                if let Some((desktop_id, name, exec, terminal, working_dir)) =
+                    Self::parse_desktop_file(&path)
+                {
                     docs.push(Document {
                         id: DocId(format!("app:{}", desktop_id)),
                         category: Category::App,

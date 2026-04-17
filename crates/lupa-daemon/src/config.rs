@@ -55,10 +55,18 @@ impl Config {
                 cfg.extractor_timeout_secs = timeout;
             }
             if let Some(ranking) = parsed.ranking {
-                if let Some(v) = ranking.apps { cfg.ranking_apps = v; }
-                if let Some(v) = ranking.files { cfg.ranking_files = v; }
-                if let Some(v) = ranking.mail { cfg.ranking_mail = v; }
-                if let Some(v) = ranking.attachments { cfg.ranking_attachments = v; }
+                if let Some(v) = ranking.apps {
+                    cfg.ranking_apps = v;
+                }
+                if let Some(v) = ranking.files {
+                    cfg.ranking_files = v;
+                }
+                if let Some(v) = ranking.mail {
+                    cfg.ranking_mail = v;
+                }
+                if let Some(v) = ranking.attachments {
+                    cfg.ranking_attachments = v;
+                }
             }
         }
 
@@ -70,9 +78,14 @@ impl Config {
         Self {
             roots: vec![PathBuf::from(&home)],
             exclude: vec![
-                ".cache".into(), ".local/share/Trash".into(), "node_modules".into(),
-                "target".into(), ".git".into(), ".venv".into(),
-                "__pycache__".into(), ".thunderbird".into(),
+                ".cache".into(),
+                ".local/share/Trash".into(),
+                "node_modules".into(),
+                "target".into(),
+                ".git".into(),
+                ".venv".into(),
+                "__pycache__".into(),
+                ".thunderbird".into(),
             ],
             max_file_size_mb: 50,
             extractor_timeout_secs: 15,
@@ -82,6 +95,14 @@ impl Config {
             ranking_attachments: 0.9,
             state_dir: state_dir(),
         }
+    }
+
+    pub fn build_fs_source(&self) -> Result<lupa_sources::fs::FsSource> {
+        Ok(lupa_sources::fs::FsSource::new(
+            self.roots.clone(),
+            self.exclude.clone(),
+            self.max_file_size_mb,
+        ))
     }
 
     pub fn build_sources(&self) -> Result<Vec<Box<dyn lupa_sources::Source>>> {
@@ -96,8 +117,13 @@ impl Config {
         sources.push(Box::new(lupa_sources::apps::AppsSource::new()));
 
         if let Some(profile) = lupa_sources::gloda::GlodaSource::find_profile() {
-            sources.push(Box::new(lupa_sources::gloda::GlodaSource::new(profile.clone(), 0)));
-            sources.push(Box::new(lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource::new(profile)));
+            sources.push(Box::new(lupa_sources::gloda::GlodaSource::new(
+                profile.clone(),
+                0,
+            )));
+            sources.push(Box::new(
+                lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource::new(profile),
+            ));
         }
 
         Ok(sources)
@@ -120,7 +146,9 @@ fn config_dir() -> PathBuf {
 }
 
 fn state_dir() -> PathBuf {
-    dirs::state_dir().unwrap_or_else(|| {
-        PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/state")
-    }).join("lupa")
+    dirs::state_dir()
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/state")
+        })
+        .join("lupa")
 }

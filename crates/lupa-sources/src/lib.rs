@@ -1,8 +1,9 @@
 //! Lupa Sources — data source trait + implementations.
 
-pub mod fs;
 pub mod apps;
+pub mod fs;
 pub mod gloda;
+pub mod manifest;
 pub mod thunderbird_attachments;
 
 use anyhow::Result;

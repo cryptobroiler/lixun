@@ -15,7 +15,9 @@ impl ThunderbirdAttachmentsSource {
 }
 
 impl crate::Source for ThunderbirdAttachmentsSource {
-    fn name(&self) -> &'static str { "thunderbird_attachments" }
+    fn name(&self) -> &'static str {
+        "thunderbird_attachments"
+    }
 
     fn index_all(&self) -> Result<Vec<Document>> {
         let mail_path = self.profile_path.join("Mail");
@@ -23,17 +25,24 @@ impl crate::Source for ThunderbirdAttachmentsSource {
         let mut docs = Vec::new();
 
         for base in [&mail_path, &imap_path] {
-            if !base.exists() { continue; }
+            if !base.exists() {
+                continue;
+            }
             for entry in walkdir::WalkDir::new(base)
                 .into_iter()
                 .filter_map(|e| e.ok())
             {
                 let path = entry.path();
-                if !path.is_file() { continue; }
-                let name = path.file_name()
+                if !path.is_file() {
+                    continue;
+                }
+                let name = path
+                    .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
-                if name.ends_with(".msf") || name.starts_with('.') { continue; }
+                if name.ends_with(".msf") || name.starts_with('.') {
+                    continue;
+                }
 
                 if let Ok(parsed) = parse_mbox_attachments(path) {
                     docs.extend(parsed);
@@ -110,9 +119,13 @@ fn extract_subject(msg: &str) -> Option<String> {
 fn guess_mime(filename: &str) -> String {
     match filename.rsplit('.').next() {
         Some("pdf") => "application/pdf".into(),
-        Some("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document".into(),
+        Some("docx") => {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document".into()
+        }
         Some("xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
-        Some("pptx") => "application/vnd.openxmlformats-officedocument.presentationml.presentation".into(),
+        Some("pptx") => {
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation".into()
+        }
         Some("txt") => "text/plain".into(),
         _ => "application/octet-stream".into(),
     }

@@ -3,6 +3,7 @@
 use anyhow::Result;
 use bytes::{BufMut, BytesMut};
 use chrono::Utc;
+use lupa_index::LupaIndex;
 use lupa_ipc::{Request, Response, socket_path, PROTOCOL_VERSION};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
@@ -77,10 +78,8 @@ async fn main() -> Result<()> {
     tracing::info!("Config loaded: roots={:?}", config.roots);
 
     let index_path = config.state_dir.join("index");
-    let mut index = lupa_index::LupaIndex::create_or_open(index_path.to_str().unwrap())?;
-    let mut writer = index.writer(128_000_000)?;
+    let index = lupa_index::LupaIndex::create_or_open(index_path.to_str().unwrap())?;
 
-    let sources = config.build_sources()?;
     let stats = Arc::new(RwLock::new(IndexStats::default()));
     let poll_state_dir = config.state_dir.clone();
     let state_dir = config.state_dir.clone();
@@ -89,43 +88,29 @@ async fn main() -> Result<()> {
     let watcher_max_size = config.max_file_size_mb;
     let shared_config = Arc::new(config);
 
-    let mut max_gloda_key: u64 = 0;
-
-    for source in &sources {
-        tracing::info!("Indexing source: {}", source.name());
-        let docs = source.index_all()?;
-        let mut stats_lock = stats.write().await;
-        for doc in &docs {
-            index.upsert(doc, &mut writer)?;
-            stats_lock.indexed_docs += 1;
-            if let Some(key) = doc.id.0.strip_prefix("mail:") {
-                if let Ok(k) = key.parse::<u64>() {
-                    max_gloda_key = max_gloda_key.max(k);
-                }
-            }
-        }
-        index.commit(&mut writer)?;
-        stats_lock.last_reindex = Some(Utc::now());
-        tracing::info!("Source {} done", source.name());
-    }
-
-    if max_gloda_key > 0 {
-        let mut cursors = cursors::Cursors::default();
-        cursors.last_gloda_key = max_gloda_key;
-        if let Err(e) = cursors.save(&state_dir) {
-            tracing::warn!("Failed to save initial Gloda cursor: {}", e);
-        }
-        tracing::info!("Gloda cursor saved: last_key={}", max_gloda_key);
-    }
-
-    tracing::info!("Total indexed: {}", stats.read().await.indexed_docs);
-
     let history = ClickHistory::load(&state_dir)?;
     let history = Arc::new(RwLock::new(history));
 
     let gui_state = Arc::new(RwLock::new(GuiState::default()));
 
     let search = SearchService::new(index);
+
+    let indexer_index = search.index();
+    let indexer_stats = Arc::clone(&stats);
+    let indexer_state_dir = state_dir.clone();
+    let indexer_config = Arc::clone(&shared_config);
+    tokio::spawn(async move {
+        if let Err(e) = run_incremental_indexer(
+            indexer_index,
+            indexer_stats,
+            indexer_state_dir,
+            indexer_config,
+        )
+        .await
+        {
+            tracing::error!("Incremental indexer error: {}", e);
+        }
+    });
 
     let watcher_index = search.index();
 
@@ -233,6 +218,82 @@ async fn main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+async fn run_incremental_indexer(
+    index: Arc<RwLock<LupaIndex>>,
+    stats: Arc<RwLock<IndexStats>>,
+    state_dir: std::path::PathBuf,
+    config: Arc<config::Config>,
+) -> Result<()> {
+    let mut manifest = lupa_sources::manifest::Manifest::load(&state_dir);
+
+    // Filesystem source
+    {
+        let fs_source = config.build_fs_source()?;
+        let (docs, deleted_ids) = fs_source.index_incremental(&mut manifest)?;
+
+        if !docs.is_empty() || !deleted_ids.is_empty() {
+            let mut idx = index.write().await;
+            let mut writer = idx.writer(128_000_000)?;
+
+            for doc in &docs {
+                idx.upsert(doc, &mut writer)?;
+            }
+            for id in &deleted_ids {
+                idx.delete_by_id(id, &mut writer)?;
+            }
+            idx.commit(&mut writer)?;
+
+            {
+                let mut stats_lock = stats.write().await;
+                stats_lock.indexed_docs += docs.len() as u64;
+                stats_lock.last_reindex = Some(Utc::now());
+            }
+
+            tracing::info!(
+                "Filesystem incremental: +{} docs, -{} deleted",
+                docs.len(),
+                deleted_ids.len()
+            );
+        } else {
+            tracing::info!("Filesystem: no changes");
+        }
+    }
+
+    // Other sources (apps, gloda, attachments)
+    {
+        let all_docs = {
+            let sources = config.build_sources()?;
+            let mut docs: Vec<(String, Vec<lupa_core::Document>)> = Vec::new();
+            for source in &sources {
+                if source.name() == "filesystem" {
+                    continue;
+                }
+                let d = source.index_all()?;
+                docs.push((source.name().to_string(), d));
+            }
+            docs
+        };
+
+        for (name, docs) in &all_docs {
+            let mut idx = index.write().await;
+            let mut writer = idx.writer(64_000_000)?;
+            for doc in docs {
+                idx.upsert(doc, &mut writer)?;
+            }
+            idx.commit(&mut writer)?;
+            {
+                let mut stats_lock = stats.write().await;
+                stats_lock.indexed_docs += docs.len() as u64;
+                stats_lock.last_reindex = Some(Utc::now());
+            }
+            tracing::info!("Source {} indexed: {} docs", name, docs.len());
+        }
+    }
+
+    manifest.save(&state_dir);
     Ok(())
 }
 
