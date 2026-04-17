@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
 
 use lupa_sources::fs::FsSource;
+use lupa_sources::Source;
 
 /// Debounced file watcher that keeps the index in sync.
 pub async fn start(
@@ -63,7 +64,7 @@ pub async fn start(
                 }
             }
         } else {
-            break; // channel closed
+            break Ok(()); // channel closed
         }
 
         // Process batch

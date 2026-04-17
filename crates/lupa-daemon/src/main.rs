@@ -7,7 +7,11 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 
+mod history;
+use history::ClickHistory;
+
 use lupa_daemon::config;
+use lupa_daemon::search_service::SearchService;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -45,9 +49,12 @@ async fn main() -> Result<()> {
 
     tracing::info!("Total indexed: {}", total_docs);
 
-    // Wrap shared state for IPC
-    let index = Arc::new(RwLock::new(index));
-    let config = Arc::new(config);
+    // Load click history
+    let history = ClickHistory::load(&config.state_dir)?;
+    let history = Arc::new(RwLock::new(history));
+
+    // Wrap index for SearchService
+    let search = Arc::new(SearchService::new(index));
 
     // Start IPC server
     let socket_path = socket_path();
@@ -55,27 +62,27 @@ async fn main() -> Result<()> {
         std::fs::remove_file(&socket_path)?;
     }
 
+    tracing::info!("Listening on {:?}", socket_path);
+
     let listener = tokio::net::UnixListener::bind(&socket_path)?;
 
     // Set socket permissions to 0600
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let meta = std::fs::metadata(&socket_path)?;
-        let mut perms = meta.permissions();
+        let metadata = std::fs::metadata(&socket_path)?;
+        let mut perms = metadata.permissions();
         perms.set_mode(0o600);
         std::fs::set_permissions(&socket_path, perms)?;
     }
 
-    tracing::info!("Listening on {:?}", socket_path);
-
     loop {
         let (stream, _) = listener.accept().await?;
-        let index = Arc::clone(&index);
-        let config = Arc::clone(&config);
+        let search = Arc::clone(&search);
+        let history = Arc::clone(&history);
 
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, index, config).await {
+            if let Err(e) = handle_client(stream, search, history).await {
                 tracing::debug!("Client error: {}", e);
             }
         });
@@ -84,10 +91,10 @@ async fn main() -> Result<()> {
 
 async fn handle_client(
     mut stream: tokio::net::UnixStream,
-    index: Arc<RwLock<lupa_index::LupaIndex>>,
-    _config: Arc<config::Config>,
+    search: Arc<SearchService>,
+    history: Arc<RwLock<ClickHistory>>,
 ) -> anyhow::Result<()> {
-    // Read request: 4-byte length prefix + JSON body
+    // Read request
     let mut header = [0u8; 4];
     stream.read_exact(&mut header).await?;
     let len = u32::from_be_bytes(header) as usize;
@@ -104,15 +111,22 @@ async fn handle_client(
         Request::Show => Response::Ok,
         Request::Hide => Response::Ok,
         Request::Search { q, limit } => {
-            let idx = index.read().await;
-            match idx.search(&lupa_core::Query { text: q, limit }) {
-                Ok(hits) => Response::Hits(hits),
+            match search.search(&q, limit).await {
+                Ok(mut hits) => {
+                    // Apply click-history ranking bonus
+                    let history = history.read().await;
+                    for hit in &mut hits {
+                        hit.score += history.bonus(&hit.id.0);
+                    }
+                    // Sort by score descending
+                    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+                    Response::Hits(hits)
+                }
                 Err(e) => Response::Error(e.to_string()),
             }
         }
-        Request::Reindex { paths: _ } => Response::Ok, // TODO
+        Request::Reindex { paths } => Response::Ok, // TODO
         Request::Status => {
-            let _idx = index.read().await;
             Response::Status {
                 indexed_docs: 0,
                 last_reindex: None,
@@ -121,7 +135,7 @@ async fn handle_client(
         }
     };
 
-    // Write response: 4-byte length prefix + JSON
+    // Write response
     let json = serde_json::to_vec(&resp)?;
     let len = json.len() as u32;
     let mut out = BytesMut::with_capacity(4 + json.len());
