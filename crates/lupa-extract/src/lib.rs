@@ -102,7 +102,20 @@ pub fn extract_path(path: &Path) -> Result<String> {
         "txt" | "md" | "log" | "csv" | "json" | "xml" | "html" | "htm" | "yaml" | "yml"
         | "toml" | "ini" | "cfg" | "rs" | "py" | "js" | "ts" | "c" | "h" | "cpp" | "hpp"
         | "java" | "go" | "sh" | "css" | "scss" | "sql" | "rb" => extract_text_file(path),
-        _ => Ok(String::new()),
+        _ => {
+            // Magic sniff for extension-less text files
+            if ext.is_empty() {
+                if let Ok(mut f) = std::fs::File::open(path) {
+                    let mut buf = [0u8; 8192];
+                    let n = std::io::Read::read(&mut f, &mut buf).unwrap_or(0);
+                    let sniff = &buf[..n];
+                    if n > 0 && !sniff.contains(&0) && std::str::from_utf8(sniff).is_ok() {
+                        return extract_text_file(path);
+                    }
+                }
+            }
+            Ok(String::new())
+        }
     }
 }
 
@@ -429,5 +442,50 @@ mod tests {
     fn test_extract_path_nonexistent() {
         let result = extract_path(std::path::Path::new("/nonexistent/file.txt"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_magic_sniff_readme_indexed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("README");
+        std::fs::write(&path, "Hello README content").unwrap();
+        let content = extract_path(&path).unwrap();
+        assert!(content.contains("Hello README"));
+    }
+
+    #[test]
+    fn test_magic_sniff_makefile_indexed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("Makefile");
+        std::fs::write(&path, "all:\n\techo hi\n").unwrap();
+        let content = extract_path(&path).unwrap();
+        assert!(content.contains("echo hi"));
+    }
+
+    #[test]
+    fn test_magic_sniff_binary_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("blob");
+        std::fs::write(&path, b"abc\0def\0binary").unwrap();
+        let content = extract_path(&path).unwrap();
+        assert_eq!(content, "");
+    }
+
+    #[test]
+    fn test_magic_sniff_empty_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("EMPTY");
+        std::fs::write(&path, b"").unwrap();
+        let content = extract_path(&path).unwrap();
+        assert_eq!(content, "");
+    }
+
+    #[test]
+    fn test_magic_sniff_non_utf8_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("latin1bin");
+        std::fs::write(&path, b"\xff\xfe\xfd").unwrap();
+        let content = extract_path(&path).unwrap();
+        assert_eq!(content, "");
     }
 }
