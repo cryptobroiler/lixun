@@ -77,6 +77,12 @@ async fn main() -> Result<()> {
     let config = config::Config::load()?;
     tracing::info!("Config loaded: roots={:?}", config.roots);
 
+    lupa_extract::init_capabilities(
+        lupa_extract::ExtractorCapabilities::probe(
+            std::time::Duration::from_secs(config.extractor_timeout_secs),
+        ),
+    );
+
     let index_path = config.state_dir.join("index");
     let index = lupa_index::LupaIndex::create_or_open(index_path.to_str().unwrap())?;
 

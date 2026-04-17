@@ -13,6 +13,7 @@ path = "src/lib.rs"
 
 [dependencies]
 lupa-core = { path = "../lupa-core" }
+lupa-extract = { path = "../lupa-extract" }
 lupa-ipc = { path = "../lupa-ipc" }
 lupa-index = { path = "../lupa-index" }
 lupa-sources = { path = "../lupa-sources" }

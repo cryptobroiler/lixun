@@ -2,25 +2,79 @@
 
 use anyhow::Result;
 use std::path::Path;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 pub mod shell;
 
-/// Extractor trait: takes bytes, returns text.
 pub trait Extractor {
     fn extract(&self, bytes: &[u8]) -> Result<String>;
     fn mime_types(&self) -> &'static [&'static str];
 }
 
-/// Registry of extractors by extension.
+#[derive(Clone, Debug)]
+pub struct ExtractorCapabilities {
+    pub timeout: Duration,
+    pub has_pdftotext: bool,
+    pub has_antiword: bool,
+    pub has_catdoc: bool,
+    pub has_libreoffice: bool,
+}
+
+impl ExtractorCapabilities {
+    /// All tools assumed available, no timeout. Safe default for tests and
+    /// any call site that runs before `init_capabilities` is invoked.
+    pub fn all_available_no_timeout() -> Self {
+        Self {
+            timeout: Duration::ZERO,
+            has_pdftotext: true,
+            has_antiword: true,
+            has_catdoc: true,
+            has_libreoffice: true,
+        }
+    }
+
+    /// Probe the environment for available extractors. Currently a stub that
+    /// assumes every tool is present; real `which::`-based probing lands in T8.
+    pub fn probe(timeout: Duration) -> Self {
+        Self {
+            timeout,
+            has_pdftotext: true,
+            has_antiword: true,
+            has_catdoc: true,
+            has_libreoffice: true,
+        }
+    }
+}
+
+static EXTRACTOR_CAPS: OnceLock<ExtractorCapabilities> = OnceLock::new();
+
+/// Initialize global extractor capabilities. Must be called once at daemon
+/// startup before any extraction. A second call is ignored (OnceLock semantics)
+/// and logged to stderr rather than panicking so test harnesses can coexist.
+pub fn init_capabilities(caps: ExtractorCapabilities) {
+    if EXTRACTOR_CAPS.set(caps).is_err() {
+        eprintln!("lupa-extract: init_capabilities called more than once; keeping first value");
+    }
+}
+
+fn capabilities() -> ExtractorCapabilities {
+    EXTRACTOR_CAPS
+        .get()
+        .cloned()
+        .unwrap_or_else(ExtractorCapabilities::all_available_no_timeout)
+}
+
 pub fn extractor_for_ext(ext: &str) -> Option<Box<dyn Extractor>> {
+    let caps = capabilities();
     match ext {
-        "pdf" if shell::command_exists("pdftotext") => Some(Box::new(PdfExtractor)),
+        "pdf" if caps.has_pdftotext => Some(Box::new(PdfExtractor::new(caps.timeout))),
         "docx" | "xlsx" | "pptx" => Some(Box::new(OoxmlExtractor)),
         "odt" => Some(Box::new(OdtExtractor)),
         "rtf" => Some(Box::new(RtfExtractor)),
-        "doc" if shell::command_exists("antiword") => Some(Box::new(ShellDocExtractor)),
-        "xls" if shell::command_exists("catdoc") => Some(Box::new(ShellXlsExtractor)),
-        "ppt" if shell::command_exists("libreoffice") => Some(Box::new(ShellPptExtractor)),
+        "doc" if caps.has_antiword => Some(Box::new(ShellDocExtractor::new(caps.timeout))),
+        "xls" if caps.has_catdoc => Some(Box::new(ShellXlsExtractor::new(caps.timeout))),
+        "ppt" if caps.has_libreoffice => Some(Box::new(ShellPptExtractor::new(caps.timeout))),
         _ => None,
     }
 }
@@ -66,11 +120,21 @@ fn extract_text_file(path: &Path) -> Result<String> {
 
 // --- PDF ---
 
-pub struct PdfExtractor;
+pub struct PdfExtractor {
+    runner: shell::SystemRunner,
+}
+
+impl PdfExtractor {
+    pub fn new(timeout: Duration) -> Self {
+        Self {
+            runner: shell::SystemRunner { timeout },
+        }
+    }
+}
 
 impl Extractor for PdfExtractor {
     fn extract(&self, bytes: &[u8]) -> Result<String> {
-        shell::extract_pdf(bytes, &shell::SystemRunner)
+        shell::extract_pdf(bytes, &self.runner)
     }
 
     fn mime_types(&self) -> &'static [&'static str] {
@@ -203,33 +267,63 @@ impl Extractor for RtfExtractor {
     }
 }
 
-pub struct ShellDocExtractor;
+pub struct ShellDocExtractor {
+    runner: shell::SystemRunner,
+}
+
+impl ShellDocExtractor {
+    pub fn new(timeout: Duration) -> Self {
+        Self {
+            runner: shell::SystemRunner { timeout },
+        }
+    }
+}
 
 impl Extractor for ShellDocExtractor {
     fn extract(&self, bytes: &[u8]) -> Result<String> {
-        shell::extract_doc(bytes, &shell::SystemRunner)
+        shell::extract_doc(bytes, &self.runner)
     }
     fn mime_types(&self) -> &'static [&'static str] {
         &["application/msword"]
     }
 }
 
-pub struct ShellXlsExtractor;
+pub struct ShellXlsExtractor {
+    runner: shell::SystemRunner,
+}
+
+impl ShellXlsExtractor {
+    pub fn new(timeout: Duration) -> Self {
+        Self {
+            runner: shell::SystemRunner { timeout },
+        }
+    }
+}
 
 impl Extractor for ShellXlsExtractor {
     fn extract(&self, bytes: &[u8]) -> Result<String> {
-        shell::extract_xls(bytes, &shell::SystemRunner)
+        shell::extract_xls(bytes, &self.runner)
     }
     fn mime_types(&self) -> &'static [&'static str] {
         &["application/vnd.ms-excel"]
     }
 }
 
-pub struct ShellPptExtractor;
+pub struct ShellPptExtractor {
+    runner: shell::SystemRunner,
+}
+
+impl ShellPptExtractor {
+    pub fn new(timeout: Duration) -> Self {
+        Self {
+            runner: shell::SystemRunner { timeout },
+        }
+    }
+}
 
 impl Extractor for ShellPptExtractor {
     fn extract(&self, bytes: &[u8]) -> Result<String> {
-        shell::extract_ppt(bytes, &shell::SystemRunner)
+        shell::extract_ppt(bytes, &self.runner)
     }
     fn mime_types(&self) -> &'static [&'static str] {
         &["application/vnd.ms-powerpoint"]
