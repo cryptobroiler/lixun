@@ -261,4 +261,79 @@ mod tests {
             "hello world"
         );
     }
+
+    #[test]
+    fn test_strip_xml_tags_empty() {
+        assert_eq!(strip_xml_tags(""), "");
+    }
+
+    #[test]
+    fn test_strip_xml_tags_only_tags() {
+        assert_eq!(strip_xml_tags("<a><b><c></c></b></a>"), "");
+    }
+
+    #[test]
+    fn test_strip_xml_tags_no_tags() {
+        assert_eq!(strip_xml_tags("plain text"), "plain text");
+    }
+
+    #[test]
+    fn test_strip_xml_tags_nested() {
+        assert_eq!(
+            strip_xml_tags("<p>hello <span>nested <b>deep</b></span> world</p>"),
+            "hello nested deep world"
+        );
+    }
+
+    #[test]
+    fn test_strip_xml_tags_with_attributes() {
+        assert_eq!(
+            strip_xml_tags("<div class='foo' id='bar'>content</div>"),
+            "content"
+        );
+    }
+
+    #[test]
+    fn test_extractor_for_ext_known_types() {
+        assert!(
+            extractor_for_ext("pdf").is_some()
+                || std::process::Command::new("pdftotext").output().is_err()
+        );
+        assert!(extractor_for_ext("docx").is_some());
+        assert!(extractor_for_ext("xlsx").is_some());
+        assert!(extractor_for_ext("pptx").is_some());
+        assert!(extractor_for_ext("odt").is_some());
+        assert!(extractor_for_ext("rtf").is_some());
+    }
+
+    #[test]
+    fn test_extractor_for_ext_unknown() {
+        assert!(extractor_for_ext("xyz").is_none());
+        assert!(extractor_for_ext("jpg").is_none());
+        assert!(extractor_for_ext("png").is_none());
+    }
+
+    #[test]
+    fn test_extract_text_file_utf8() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.txt");
+        std::fs::write(&path, "hello utf8 world").unwrap();
+        let result = extract_path(&path).unwrap();
+        assert!(result.contains("hello"));
+    }
+
+    #[test]
+    fn test_extract_path_unknown_ext() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.xyz");
+        std::fs::write(&path, "some binary data").unwrap();
+        let result = extract_path(&path).unwrap();
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_extract_path_nonexistent() {
+        let result = extract_path(std::path::Path::new("/nonexistent/file.txt"));
+        assert!(result.is_err());
+    }
 }

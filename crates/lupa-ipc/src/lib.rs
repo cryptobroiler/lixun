@@ -135,13 +135,11 @@ pub fn socket_path() -> PathBuf {
 }
 
 fn get_uid() -> u32 {
-    // Try UID environment variable first (set by login/systemd)
     if let Ok(uid) = std::env::var("UID") {
         if let Ok(uid) = uid.parse::<u32>() {
             return uid;
         }
     }
-    // Fallback: read from /proc (Linux-specific)
     if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
         for line in status.lines() {
             if let Some(rest) = line.strip_prefix("Uid:") {
@@ -157,6 +155,122 @@ fn get_uid() -> u32 {
             }
         }
     }
-    // Last resort fallback
     1000
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encode_decode_toggle() {
+        let mut codec = FrameCodec::default();
+        let mut buf = BytesMut::new();
+        codec.encode(Request::Toggle, &mut buf).unwrap();
+
+        let decoded = codec.decode(&mut buf).unwrap().unwrap();
+        assert!(matches!(decoded, Request::Toggle));
+    }
+
+    #[test]
+    fn test_encode_decode_search() {
+        let mut codec = FrameCodec::default();
+        let mut buf = BytesMut::new();
+        let req = Request::Search {
+            q: "hello world".to_string(),
+            limit: 10,
+        };
+        codec.encode(req.clone(), &mut buf).unwrap();
+
+        let decoded = codec.decode(&mut buf).unwrap().unwrap();
+        match decoded {
+            Request::Search { q, limit } => {
+                assert_eq!(q, "hello world");
+                assert_eq!(limit, 10);
+            }
+            _ => panic!("Expected Search variant"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_reindex() {
+        let mut codec = FrameCodec::default();
+        let mut buf = BytesMut::new();
+        let req = Request::Reindex {
+            paths: vec![PathBuf::from("/tmp/test")],
+        };
+        codec.encode(req, &mut buf).unwrap();
+
+        let decoded = codec.decode(&mut buf).unwrap().unwrap();
+        match decoded {
+            Request::Reindex { paths } => {
+                assert_eq!(paths.len(), 1);
+                assert_eq!(paths[0], PathBuf::from("/tmp/test"));
+            }
+            _ => panic!("Expected Reindex variant"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_status() {
+        let mut codec = FrameCodec::default();
+        let mut buf = BytesMut::new();
+        codec.encode(Request::Status, &mut buf).unwrap();
+
+        let decoded = codec.decode(&mut buf).unwrap().unwrap();
+        assert!(matches!(decoded, Request::Status));
+    }
+
+    #[test]
+    fn test_version_mismatch() {
+        let mut codec = FrameCodec::default();
+        let mut buf = BytesMut::new();
+        // Manually craft a frame with wrong version
+        let json = serde_json::to_vec(&Request::Toggle).unwrap();
+        buf.put_u32((2 + json.len()) as u32);
+        buf.put_u16(99);
+        buf.put_slice(&json);
+
+        let result = codec.decode(&mut buf);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("version mismatch"));
+    }
+
+    #[test]
+    fn test_incomplete_frame_returns_none() {
+        let mut codec = FrameCodec::default();
+        let mut buf = BytesMut::new();
+        buf.put_u32(10);
+        let result = codec.decode(&mut buf).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_empty_buffer_returns_none() {
+        let mut codec = FrameCodec::default();
+        let mut buf = BytesMut::new();
+        let result = codec.decode(&mut buf).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_multiple_requests_in_buffer() {
+        let mut codec = FrameCodec::default();
+        let mut buf = BytesMut::new();
+        codec.encode(Request::Toggle, &mut buf).unwrap();
+        codec.encode(Request::Status, &mut buf).unwrap();
+
+        let first = codec.decode(&mut buf).unwrap().unwrap();
+        assert!(matches!(first, Request::Toggle));
+
+        let second = codec.decode(&mut buf).unwrap().unwrap();
+        assert!(matches!(second, Request::Status));
+    }
+
+    #[test]
+    fn test_socket_path_format() {
+        let path = socket_path();
+        assert!(path.to_string_lossy().contains("lupa.sock"));
+    }
 }

@@ -281,4 +281,183 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "test.txt");
     }
+
+    #[test]
+    fn test_delete_by_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let mut index = LupaIndex::create_or_open(path).unwrap();
+        let mut writer = index.writer(20_000_000).unwrap();
+
+        let doc = Document {
+            id: lupa_core::DocId("fs:/tmp/delete_me.txt".to_string()),
+            category: Category::File,
+            title: "delete_me.txt".to_string(),
+            subtitle: "/tmp/delete_me.txt".to_string(),
+            body: Some("this will be deleted".to_string()),
+            path: "/tmp/delete_me.txt".to_string(),
+            mtime: 0,
+            size: 100,
+            action: lupa_core::Action::OpenFile {
+                path: "/tmp/delete_me.txt".into(),
+            },
+            extract_fail: false,
+        };
+
+        index.upsert(&doc, &mut writer).unwrap();
+        index.commit(&mut writer).unwrap();
+        writer.wait_merging_threads().unwrap();
+
+        let mut writer = index.writer(20_000_000).unwrap();
+        index
+            .delete_by_id("fs:/tmp/delete_me.txt", &mut writer)
+            .unwrap();
+        index
+            .delete_by_id("fs:/nonexistent.txt", &mut writer)
+            .unwrap();
+        index.commit(&mut writer).unwrap();
+        writer.wait_merging_threads().unwrap();
+    }
+
+    #[test]
+    fn test_upsert_replaces_existing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let mut index = LupaIndex::create_or_open(path).unwrap();
+        let mut writer = index.writer(20_000_000).unwrap();
+
+        let doc1 = Document {
+            id: lupa_core::DocId("fs:/tmp/same.txt".to_string()),
+            category: Category::File,
+            title: "old_title.txt".to_string(),
+            subtitle: "/tmp/same.txt".to_string(),
+            body: Some("old content".to_string()),
+            path: "/tmp/same.txt".to_string(),
+            mtime: 100,
+            size: 100,
+            action: lupa_core::Action::OpenFile {
+                path: "/tmp/same.txt".into(),
+            },
+            extract_fail: false,
+        };
+
+        index.upsert(&doc1, &mut writer).unwrap();
+
+        let doc2 = Document {
+            id: lupa_core::DocId("fs:/tmp/same.txt".to_string()),
+            category: Category::File,
+            title: "new_title.txt".to_string(),
+            subtitle: "/tmp/same.txt".to_string(),
+            body: Some("new content".to_string()),
+            path: "/tmp/same.txt".to_string(),
+            mtime: 200,
+            size: 200,
+            action: lupa_core::Action::OpenFile {
+                path: "/tmp/same.txt".into(),
+            },
+            extract_fail: false,
+        };
+
+        index.upsert(&doc2, &mut writer).unwrap();
+        index.commit(&mut writer).unwrap();
+
+        let results = index
+            .search(&Query {
+                text: "new".to_string(),
+                limit: 10,
+            })
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "new_title.txt");
+    }
+
+    #[test]
+    fn test_empty_search_returns_no_results() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let index = LupaIndex::create_or_open(path).unwrap();
+
+        let results = index
+            .search(&Query {
+                text: "".to_string(),
+                limit: 10,
+            })
+            .unwrap();
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_multiple_documents_search() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let mut index = LupaIndex::create_or_open(path).unwrap();
+        let mut writer = index.writer(20_000_000).unwrap();
+
+        for i in 0..5 {
+            let doc = Document {
+                id: lupa_core::DocId(format!("fs:/tmp/doc{}.txt", i)),
+                category: Category::File,
+                title: format!("doc{}.txt", i),
+                subtitle: format!("/tmp/doc{}.txt", i),
+                body: Some(format!("content number {}", i)),
+                path: format!("/tmp/doc{}.txt", i),
+                mtime: i as i64,
+                size: 100,
+                action: lupa_core::Action::OpenFile {
+                    path: format!("/tmp/doc{}.txt", i).into(),
+                },
+                extract_fail: false,
+            };
+            index.upsert(&doc, &mut writer).unwrap();
+        }
+        index.commit(&mut writer).unwrap();
+
+        let results = index
+            .search(&Query {
+                text: "content".to_string(),
+                limit: 10,
+            })
+            .unwrap();
+        assert_eq!(results.len(), 5);
+    }
+
+    #[test]
+    fn test_search_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let mut index = LupaIndex::create_or_open(path).unwrap();
+        let mut writer = index.writer(20_000_000).unwrap();
+
+        for i in 0..10 {
+            let doc = Document {
+                id: lupa_core::DocId(format!("fs:/tmp/lim{}.txt", i)),
+                category: Category::File,
+                title: format!("lim{}.txt", i),
+                subtitle: format!("/tmp/lim{}.txt", i),
+                body: Some(format!("limit test {}", i)),
+                path: format!("/tmp/lim{}.txt", i),
+                mtime: i as i64,
+                size: 100,
+                action: lupa_core::Action::OpenFile {
+                    path: format!("/tmp/lim{}.txt", i).into(),
+                },
+                extract_fail: false,
+            };
+            index.upsert(&doc, &mut writer).unwrap();
+        }
+        index.commit(&mut writer).unwrap();
+
+        let results = index
+            .search(&Query {
+                text: "limit".to_string(),
+                limit: 3,
+            })
+            .unwrap();
+        assert!(results.len() <= 3);
+    }
 }

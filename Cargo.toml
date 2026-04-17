@@ -48,3 +48,5 @@ bytes = "1.0"
 # Concurrency
 rayon = "1.10"
 num_cpus = "1.16"
+
+tempfile = "3"
