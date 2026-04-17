@@ -6,6 +6,8 @@ edition.workspace = true
 [dependencies]
 anyhow.workspace = true
 chardetng.workspace = true
+encoding_rs = "0.8"
+tracing.workspace = true
 zip.workspace = true
 rtf-grimoire.workspace = true
 which = "6"

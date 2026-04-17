@@ -80,6 +80,7 @@ impl CommandRunner for SystemRunner {
     }
 }
 
+#[doc(hidden)]
 pub fn command_exists(cmd: &str) -> bool {
     which::which(cmd).is_ok()
 }

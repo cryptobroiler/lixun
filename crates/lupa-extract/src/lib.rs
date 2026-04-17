@@ -34,15 +34,31 @@ impl ExtractorCapabilities {
         }
     }
 
-    /// Probe the environment for available extractors. Currently a stub that
-    /// assumes every tool is present; real `which::`-based probing lands in T8.
+    /// Probe the environment for available extractors via `which::which`.
+    /// Missing tools are logged at `warn` and disable their corresponding
+    /// extractor; found tools log at `info` with the resolved path.
     pub fn probe(timeout: Duration) -> Self {
+        fn probe_tool(name: &str) -> bool {
+            match which::which(name) {
+                Ok(p) => {
+                    tracing::info!("extractor tool {}: found at {}", name, p.display());
+                    true
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "extractor tool {}: NOT found — related content search disabled",
+                        name
+                    );
+                    false
+                }
+            }
+        }
         Self {
             timeout,
-            has_pdftotext: true,
-            has_antiword: true,
-            has_catdoc: true,
-            has_libreoffice: true,
+            has_pdftotext: probe_tool("pdftotext"),
+            has_antiword: probe_tool("antiword"),
+            has_catdoc: probe_tool("catdoc"),
+            has_libreoffice: probe_tool("libreoffice"),
         }
     }
 }
@@ -66,7 +82,13 @@ fn capabilities() -> ExtractorCapabilities {
 }
 
 pub fn extractor_for_ext(ext: &str) -> Option<Box<dyn Extractor>> {
-    let caps = capabilities();
+    extractor_for_ext_with_caps(ext, &capabilities())
+}
+
+pub(crate) fn extractor_for_ext_with_caps(
+    ext: &str,
+    caps: &ExtractorCapabilities,
+) -> Option<Box<dyn Extractor>> {
     match ext {
         "pdf" if caps.has_pdftotext => Some(Box::new(PdfExtractor::new(caps.timeout))),
         "docx" | "xlsx" | "pptx" => Some(Box::new(OoxmlExtractor)),
@@ -487,5 +509,32 @@ mod tests {
         std::fs::write(&path, b"\xff\xfe\xfd").unwrap();
         let content = extract_path(&path).unwrap();
         assert_eq!(content, "");
+    }
+
+    #[test]
+    fn test_extractor_for_ext_respects_caps_struct() {
+        let caps = ExtractorCapabilities {
+            timeout: std::time::Duration::from_secs(15),
+            has_pdftotext: false,
+            has_antiword: false,
+            has_catdoc: false,
+            has_libreoffice: false,
+        };
+        assert!(extractor_for_ext_with_caps("pdf", &caps).is_none());
+        assert!(extractor_for_ext_with_caps("doc", &caps).is_none());
+        assert!(extractor_for_ext_with_caps("xls", &caps).is_none());
+        assert!(extractor_for_ext_with_caps("ppt", &caps).is_none());
+        assert!(extractor_for_ext_with_caps("docx", &caps).is_some());
+        assert!(extractor_for_ext_with_caps("odt", &caps).is_some());
+        assert!(extractor_for_ext_with_caps("rtf", &caps).is_some());
+    }
+
+    #[test]
+    fn test_extractor_for_ext_all_available_no_timeout() {
+        let caps = ExtractorCapabilities::all_available_no_timeout();
+        assert!(extractor_for_ext_with_caps("pdf", &caps).is_some());
+        assert!(extractor_for_ext_with_caps("doc", &caps).is_some());
+        assert!(extractor_for_ext_with_caps("rtf", &caps).is_some());
+        assert!(extractor_for_ext_with_caps("xyz", &caps).is_none());
     }
 }
