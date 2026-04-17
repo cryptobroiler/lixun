@@ -4,5 +4,17 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+lupa-core = { path = "../lupa-core" }
+lupa-ipc = { path = "../lupa-ipc" }
 anyhow.workspace = true
+tokio.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true
+glib = "0.20"
+gtk = { package = "gtk4", version = "0.9" }
+gtk4-layer-shell = "0.5"
+
+[[bin]]
+name = "lupa-gui"
+path = "src/main.rs"
