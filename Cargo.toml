@@ -1,0 +1,12 @@
+[workspace]
+members = [
+    "crates/lupa-core",
+    "crates/lupa-ipc",
+    "crates/lupa-index",
+    "crates/lupa-extract",
+    "crates/lupa-sources",
+    "crates/lupa-daemon",
+    "crates/lupa-gui",
+    "crates/lupa-cli",
+]
+resolver = "2"

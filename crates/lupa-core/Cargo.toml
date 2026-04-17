@@ -1,0 +1,9 @@
+[package]
+name = "lupa-core"
+version = "0.1.0"
+edition = "2024"
+description = "Shared types for Lupa: Query, Hit, Category, Action"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
