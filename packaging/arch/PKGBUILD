@@ -10,36 +10,18 @@ depends=("gtk4" "gtk4-layer-shell" "poppler" "zstd" "sqlite")
 optdepends=("antiword: .doc extraction"
             "catdoc: .doc extraction"
             "libreoffice-fresh: .docx/.xlsx/.pptx extraction")
-makedepends=("rust" "cargo" "gcc" "pkg-config" "sqlite" "zstd")
 provides=("lupa")
 conflicts=("lupa")
-source=("lupa::git+https://repo.dkp.hk/denis/lupa.git#branch=critical-bugfixes")
+
+# Local tarball — replace with release URL for distribution:
+# source=("https://repo.dkp.hk/lupa/lupa-${pkgver}-x86_64.tar.gz")
+source=("lupa-${pkgver}-x86_64.tar.gz::file:///home/cryptobroiler/Developer/lupa/packaging/arch/releases/lupa-${pkgver}-x86_64.tar.gz")
 md5sums=("SKIP")
 
-pkgver() {
-  cd "lupa"
-  local ver
-  ver=$(git describe --tags --long 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g') || ver=""
-  if [ -z "$ver" ]; then
-    ver="0.1.0.r$(git rev-list --count HEAD).g$(git rev-parse --short HEAD)"
-  fi
-  echo "$ver"
-}
-
-build() {
-  cd "lupa"
-  export RUSTUP_TOOLCHAIN=stable
-  export CC=gcc
-  unset CFLAGS CXXFLAGS LDFLAGS
-  rm -rf target
-  cargo build --release
-}
-
 package() {
-  cd "lupa"
-  install -Dm755 "target/release/lupad" "$pkgdir/usr/bin/lupad"
-  install -Dm755 "target/release/lupa" "$pkgdir/usr/bin/lupa"
-  install -Dm755 "target/release/lupa-gui" "$pkgdir/usr/bin/lupa-gui"
-  install -Dm644 "packaging/systemd/lupad.service" "$pkgdir/usr/lib/systemd/user/lupad.service"
-  install -Dm644 "packaging/desktop/lupa.desktop" "$pkgdir/usr/share/applications/lupa.desktop"
+  install -Dm755 "lupad" "$pkgdir/usr/bin/lupad"
+  install -Dm755 "lupa" "$pkgdir/usr/bin/lupa"
+  install -Dm755 "lupa-gui" "$pkgdir/usr/bin/lupa-gui"
+  install -Dm644 "${srcdir}/../systemd/lupad.service" "$pkgdir/usr/lib/systemd/user/lupad.service"
+  install -Dm644 "${srcdir}/../desktop/lupa.desktop" "$pkgdir/usr/share/applications/lupa.desktop"
 }
