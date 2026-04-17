@@ -176,7 +176,8 @@ fn execute_action(hit: &Hit) -> Result<()> {
         }
         Action::OpenMail { message_id } => {
             std::process::Command::new("thunderbird")
-                .arg("-message")
+                .arg("-mail")
+                .arg("-messageid")
                 .arg(message_id)
                 .spawn()?;
             Ok(())
@@ -203,7 +204,8 @@ fn execute_action(hit: &Hit) -> Result<()> {
         }
         Action::OpenParentMail { message_id } => {
             std::process::Command::new("thunderbird")
-                .arg("-message")
+                .arg("-mail")
+                .arg("-messageid")
                 .arg(message_id)
                 .spawn()?;
             Ok(())
@@ -219,7 +221,8 @@ fn execute_secondary_action(hit: &Hit) -> Result<()> {
         }
         Action::OpenParentMail { message_id } => {
             std::process::Command::new("thunderbird")
-                .arg("-message")
+                .arg("-mail")
+                .arg("-messageid")
                 .arg(message_id)
                 .spawn()?;
             Ok(())
