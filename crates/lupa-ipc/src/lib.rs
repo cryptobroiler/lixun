@@ -12,7 +12,10 @@ use tokio_util::codec::{Decoder, Encoder};
 
 use lupa_core::Hit;
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
+
+/// The oldest protocol version this build can negotiate with.
+pub const MIN_PROTOCOL_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Request {
@@ -29,6 +32,10 @@ pub enum Request {
 pub enum Response {
     Ok,
     Hits(Vec<Hit>),
+    HitsWithExtras {
+        hits: Vec<Hit>,
+        calculation: Option<lupa_core::Calculation>,
+    },
     Status {
         indexed_docs: u64,
         last_reindex: Option<DateTime<Utc>>,
@@ -270,5 +277,51 @@ mod tests {
     fn test_socket_path_format() {
         let path = socket_path();
         assert!(path.to_string_lossy().contains("lupa.sock"));
+    }
+
+    #[test]
+    fn test_hits_with_extras_roundtrip_empty() {
+        let resp = Response::HitsWithExtras {
+            hits: vec![],
+            calculation: None,
+        };
+        let json = serde_json::to_vec(&resp).unwrap();
+        let decoded: Response = serde_json::from_slice(&json).unwrap();
+        match decoded {
+            Response::HitsWithExtras { hits, calculation } => {
+                assert!(hits.is_empty());
+                assert!(calculation.is_none());
+            }
+            _ => panic!("expected HitsWithExtras"),
+        }
+    }
+
+    #[test]
+    fn test_hits_with_extras_roundtrip_with_calculation() {
+        let resp = Response::HitsWithExtras {
+            hits: vec![],
+            calculation: Some(lupa_core::Calculation {
+                expr: "2+2".into(),
+                result: "4".into(),
+            }),
+        };
+        let json = serde_json::to_vec(&resp).unwrap();
+        let decoded: Response = serde_json::from_slice(&json).unwrap();
+        match decoded {
+            Response::HitsWithExtras { calculation, .. } => {
+                let c = calculation.expect("calculation present");
+                assert_eq!(c.expr, "2+2");
+                assert_eq!(c.result, "4");
+            }
+            _ => panic!("expected HitsWithExtras"),
+        }
+    }
+
+    #[test]
+    fn test_hits_variant_still_parses_v1() {
+        let resp = Response::Hits(vec![]);
+        let json = serde_json::to_vec(&resp).unwrap();
+        let decoded: Response = serde_json::from_slice(&json).unwrap();
+        assert!(matches!(decoded, Response::Hits(h) if h.is_empty()));
     }
 }

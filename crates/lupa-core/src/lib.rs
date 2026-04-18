@@ -79,6 +79,13 @@ pub struct Hit {
     pub extract_fail: bool,
 }
 
+/// Inline calculator result (for Spotlight-style "2+2 = 4" display).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Calculation {
+    pub expr: String,
+    pub result: String,
+}
+
 /// A document to be indexed.
 #[derive(Debug, Clone)]
 pub struct Document {
@@ -225,5 +232,18 @@ mod tests {
         let q2 = q.clone();
         assert_eq!(q.text, q2.text);
         assert_eq!(q.limit, q2.limit);
+    }
+
+    #[test]
+    fn test_calculation_serde_roundtrip() {
+        let calculation = Calculation {
+            expr: "sqrt(16)+pi".to_string(),
+            result: "7.141592654".to_string(),
+        };
+
+        let json = serde_json::to_string(&calculation).unwrap();
+        let decoded: Calculation = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(calculation, decoded);
     }
 }

@@ -5,7 +5,7 @@ use bytes::{BufMut, BytesMut};
 use chrono::Utc;
 use futures::StreamExt;
 use lupa_index::LupaIndex;
-use lupa_ipc::{PROTOCOL_VERSION, Request, Response, socket_path};
+use lupa_ipc::{MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, Request, Response, socket_path};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -387,10 +387,10 @@ async fn handle_client(
     let mut version_buf = [0u8; 2];
     stream.read_exact(&mut version_buf).await?;
     let version = u16::from_be_bytes(version_buf);
-    if version != PROTOCOL_VERSION {
+    if !(MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&version) {
         let resp = Response::Error(format!(
-            "version mismatch: expected {}, got {}",
-            PROTOCOL_VERSION, version
+            "unsupported protocol version: got {}, supported {}..={}",
+            version, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION
         ));
         let json = serde_json::to_vec(&resp)?;
         let out_len = (json.len() as u32).to_be_bytes();
@@ -398,6 +398,7 @@ async fn handle_client(
         stream.write_all(&json).await?;
         return Ok(());
     }
+    let negotiated_version = version;
     let mut buf = vec![0u8; len - 2];
     stream.read_exact(&mut buf).await?;
 
@@ -432,7 +433,12 @@ async fn handle_client(
                         .partial_cmp(&a.score)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 });
-                Response::Hits(hits)
+                if negotiated_version >= 2 {
+                    let calculation = lupa_index::calculator::detect(&q);
+                    Response::HitsWithExtras { hits, calculation }
+                } else {
+                    Response::Hits(hits)
+                }
             }
             Err(e) => Response::Error(e.to_string()),
         },
@@ -466,7 +472,7 @@ async fn handle_client(
     let total_len = (2 + json.len()) as u32;
     let mut out = BytesMut::with_capacity(4 + total_len as usize);
     out.put_u32(total_len);
-    out.put_u16(PROTOCOL_VERSION);
+    out.put_u16(negotiated_version);
     out.put_slice(&json);
     stream.write_all(&out).await?;
 

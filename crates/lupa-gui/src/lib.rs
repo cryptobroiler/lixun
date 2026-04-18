@@ -96,6 +96,14 @@ fn start_ipc_thread() -> IpcClient {
                         *r = hits;
                     }
                 }
+                Ok(Response::HitsWithExtras {
+                    hits,
+                    calculation: _,
+                }) => {
+                    if let Ok(mut r) = resp_clone.lock() {
+                        *r = hits;
+                    }
+                }
                 Ok(Response::Error(msg)) => {
                     tracing::error!("Daemon error: {}", msg);
                 }

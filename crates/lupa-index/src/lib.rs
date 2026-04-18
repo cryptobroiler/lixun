@@ -1,5 +1,6 @@
 //! Lupa Index — Tantivy wrapper: schema, writer, searcher.
 
+pub mod calculator;
 pub mod tokenizer;
 
 use anyhow::Result;
