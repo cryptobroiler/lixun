@@ -163,7 +163,11 @@ pub fn sanitize_filename(s: &str) -> String {
         out = "attachment".to_string();
     }
     if out.len() > 200 {
-        out.truncate(200);
+        let mut cut = 200;
+        while cut > 0 && !out.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.truncate(cut);
     }
     out
 }
@@ -534,5 +538,25 @@ mod tests {
     fn test_fallback_id_deterministic() {
         let path = Path::new("/tmp/mail/Inbox");
         assert_eq!(fallback_id(path, 42), fallback_id(path, 42));
+    }
+
+    #[test]
+    fn test_sanitize_filename_multibyte_no_panic_at_boundary() {
+        // 3-byte UTF-8 chars (CJK ideograph) — 100 chars = 300 bytes. Truncate should not panic.
+        let input = "あ".repeat(100);
+        assert_eq!(input.len(), 300);
+        let out = sanitize_filename(&input);
+        // Result must be valid UTF-8 and <=200 bytes
+        assert!(out.len() <= 200);
+        // Must not panic — reaching this line means success
+    }
+
+    #[test]
+    fn test_sanitize_filename_emoji_no_panic_at_boundary() {
+        // 4-byte UTF-8 chars (emoji) — 60 emojis = 240 bytes
+        let input = "😀".repeat(60);
+        assert!(input.len() > 200);
+        let out = sanitize_filename(&input);
+        assert!(out.len() <= 200);
     }
 }

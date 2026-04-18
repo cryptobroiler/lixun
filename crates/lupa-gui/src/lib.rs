@@ -5,14 +5,14 @@
 
 use std::cell::RefCell;
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
 use glib::clone;
 use gtk::prelude::*;
 use gtk4_layer_shell::LayerShell;
 use lupa_core::{Action, Category, Hit};
-use lupa_ipc::{PROTOCOL_VERSION, Request, Response, socket_path};
+use lupa_ipc::{socket_path, Request, Response, PROTOCOL_VERSION};
 
 use anyhow::Result;
 
@@ -205,7 +205,11 @@ pub(crate) fn sanitize_filename(s: &str) -> String {
         out = "attachment".to_string();
     }
     if out.len() > 200 {
-        out.truncate(200);
+        let mut cut = 200;
+        while cut > 0 && !out.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.truncate(cut);
     }
     out
 }
@@ -950,5 +954,25 @@ mod tests {
     fn test_sweep_stale_attachments_nonexistent_dir_is_noop() {
         let p = std::path::Path::new("/nonexistent/lupa-sweep-test-path");
         sweep_stale_attachments(p, std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_sanitize_filename_multibyte_no_panic_at_boundary() {
+        // 3-byte UTF-8 chars (CJK ideograph) — 100 chars = 300 bytes. Truncate should not panic.
+        let input = "あ".repeat(100);
+        assert_eq!(input.len(), 300);
+        let out = sanitize_filename(&input);
+        // Result must be valid UTF-8 and <=200 bytes
+        assert!(out.len() <= 200);
+        // Must not panic — reaching this line means success
+    }
+
+    #[test]
+    fn test_sanitize_filename_emoji_no_panic_at_boundary() {
+        // 4-byte UTF-8 chars (emoji) — 60 emojis = 240 bytes
+        let input = "😀".repeat(60);
+        assert!(input.len() > 200);
+        let out = sanitize_filename(&input);
+        assert!(out.len() <= 200);
     }
 }
