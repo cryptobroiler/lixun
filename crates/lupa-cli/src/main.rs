@@ -137,6 +137,11 @@ fn handle_response(resp: Response) {
         Response::Visibility { visible } => {
             println!("{}", if visible { "show" } else { "hide" });
         }
+        Response::Queries(queries) => {
+            for q in queries {
+                println!("{}", q);
+            }
+        }
         Response::Error(msg) => {
             eprintln!("Error: {}", msg);
         }

@@ -26,6 +26,8 @@ pub enum Request {
     Reindex { paths: Vec<PathBuf> },
     Status,
     RecordClick { doc_id: String },
+    RecordQuery { q: String },
+    SearchHistory { limit: u32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +46,7 @@ pub enum Response {
     Visibility {
         visible: bool,
     },
+    Queries(Vec<String>),
     Error(String),
 }
 

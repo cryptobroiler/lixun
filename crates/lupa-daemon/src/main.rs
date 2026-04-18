@@ -14,7 +14,9 @@ use tokio::sync::RwLock;
 mod cursors;
 mod gloda_poll;
 mod history;
+mod query_log;
 use history::ClickHistory;
+use query_log::QueryLog;
 
 use lupa_daemon::config;
 use lupa_daemon::search_service::SearchService;
@@ -98,6 +100,9 @@ async fn main() -> Result<()> {
 
     let history = ClickHistory::load(&state_dir)?;
     let history = Arc::new(RwLock::new(history));
+
+    let query_log = QueryLog::load(&state_dir)?;
+    let query_log = Arc::new(RwLock::new(query_log));
 
     let gui_state = Arc::new(RwLock::new(GuiState::default()));
 
@@ -214,12 +219,13 @@ async fn main() -> Result<()> {
                 };
                 let search = search.clone();
                 let history = Arc::clone(&history);
+                let query_log = Arc::clone(&query_log);
                 let stats = Arc::clone(&stats);
                 let gui_state = Arc::clone(&gui_state);
                 let shared_config = Arc::clone(&shared_config);
 
                 tokio::spawn(async move {
-                    if let Err(e) = handle_client(stream, search, history, stats, gui_state, shared_config).await {
+                    if let Err(e) = handle_client(stream, search, history, query_log, stats, gui_state, shared_config).await {
                         tracing::debug!("Client error: {}", e);
                     }
                 });
@@ -230,6 +236,10 @@ async fn main() -> Result<()> {
                 let history = history.read().await;
                 if let Err(e) = history.save(&state_dir) {
                     tracing::error!("Failed to save click history: {}", e);
+                }
+                let log = query_log.read().await;
+                if let Err(e) = log.save(&state_dir) {
+                    tracing::error!("Failed to save query log: {}", e);
                 }
                 tracing::info!("Shutdown complete");
                 break;
@@ -374,6 +384,7 @@ async fn handle_client(
     mut stream: tokio::net::UnixStream,
     search: SearchService,
     history: Arc<RwLock<ClickHistory>>,
+    query_log: Arc<RwLock<QueryLog>>,
     stats: Arc<RwLock<IndexStats>>,
     gui_state: Arc<RwLock<GuiState>>,
     config: Arc<config::Config>,
@@ -465,6 +476,19 @@ async fn handle_client(
             let mut history = history.write().await;
             history.record_click(&doc_id);
             Response::Ok
+        }
+        Request::RecordQuery { q } => {
+            if lupa_index::calculator::detect(&q).is_some() {
+                Response::Ok
+            } else {
+                let mut log = query_log.write().await;
+                log.record_query(&q);
+                Response::Ok
+            }
+        }
+        Request::SearchHistory { limit } => {
+            let log = query_log.read().await;
+            Response::Queries(log.recent(limit as usize))
         }
     };
 
