@@ -10,7 +10,7 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 
 use crate::manifest::Manifest;
-use lupa_extract;
+use crate::mime_icons;
 
 /// Filesystem source configuration.
 pub struct FsSource {
@@ -61,104 +61,34 @@ impl FsSource {
             .build()
             .expect("failed to build rayon pool")
     }
-}
 
-impl crate::Source for FsSource {
-    fn name(&self) -> &'static str {
-        "filesystem"
+    pub fn metadata_for_path(path: &Path) -> (String, String) {
+        let mime = mime_guess::from_path(path).first_or_octet_stream();
+        (
+            mime_icons::mime_to_icon_name(&mime),
+            mime_icons::human_kind(&mime),
+        )
     }
 
-    fn index_all(&self) -> Result<Vec<Document>> {
-        let max_size = self.max_file_size_mb * 1024 * 1024;
+    fn build_document(meta: FileMeta, body: Option<String>, extract_fail: bool) -> Document {
+        let (icon_name, kind_label) = Self::metadata_for_path(&meta.path);
 
-        // --- Pass 1: Metadata (sequential, I/O bound for directory traversal) ---
-        let mut metas: Vec<FileMeta> = Vec::new();
-
-        for root in &self.roots {
-            for entry in walkdir::WalkDir::new(root)
-                .into_iter()
-                .filter_entry(|e| !self.should_exclude(e.file_name().to_string_lossy().as_ref()))
-                .filter_map(|e| e.ok())
-            {
-                if !entry.file_type().is_file() {
-                    continue;
-                }
-
-                let path = entry.path();
-                let Ok(metadata) = std::fs::metadata(path) else {
-                    continue;
-                };
-
-                let mtime = metadata
-                    .modified()
-                    .map(|t| {
-                        t.duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_secs() as i64)
-                            .unwrap_or(0)
-                    })
-                    .unwrap_or(0);
-
-                metas.push(FileMeta {
-                    path: path.to_path_buf(),
-                    path_str: path.to_string_lossy().to_string(),
-                    filename: path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default(),
-                    mtime,
-                    size: metadata.len(),
-                });
-            }
+        Document {
+            id: DocId(format!("fs:{}", meta.path_str)),
+            category: Category::File,
+            title: meta.filename,
+            subtitle: meta.path_str.clone(),
+            icon_name: Some(icon_name),
+            kind_label: Some(kind_label),
+            body,
+            path: meta.path_str,
+            mtime: meta.mtime,
+            size: meta.size,
+            action: Action::OpenFile { path: meta.path },
+            extract_fail,
         }
-
-        tracing::info!(
-            "Filesystem: {} files found, extracting content in parallel...",
-            metas.len()
-        );
-
-        // --- Pass 2: Content extraction (parallel via rayon) ---
-        let pool = Self::build_pool();
-        let docs: Vec<Document> = pool.install(|| {
-            metas
-                .into_par_iter()
-                .map(|meta| {
-                    let (body, extract_fail) = if meta.size <= max_size {
-                        match Self::extract_content(&meta.path) {
-                            Ok(Some(text)) => (Some(text), false),
-                            Ok(None) => (None, false),
-                            Err(_) => (None, true),
-                        }
-                    } else {
-                        (None, false)
-                    };
-
-                    Document {
-                        id: DocId(format!("fs:{}", meta.path_str)),
-                        category: Category::File,
-                        title: meta.filename,
-                        subtitle: meta.path_str.clone(),
-                        body,
-                        path: meta.path_str,
-                        mtime: meta.mtime,
-                        size: meta.size,
-                        action: Action::OpenFile { path: meta.path },
-                        extract_fail,
-                    }
-                })
-                .collect()
-        });
-
-        let extract_fails = docs.iter().filter(|d| d.extract_fail).count();
-        tracing::info!(
-            "Filesystem: indexed {} documents ({} extract failures)",
-            docs.len(),
-            extract_fails
-        );
-        Ok(docs)
     }
-}
 
-impl FsSource {
     pub fn index_incremental(
         &self,
         manifest: &mut Manifest,
@@ -248,18 +178,7 @@ impl FsSource {
                         (None, false)
                     };
 
-                    Document {
-                        id: DocId(format!("fs:{}", meta.path_str)),
-                        category: Category::File,
-                        title: meta.filename,
-                        subtitle: meta.path_str.clone(),
-                        body,
-                        path: meta.path_str,
-                        mtime: meta.mtime,
-                        size: meta.size,
-                        action: Action::OpenFile { path: meta.path },
-                        extract_fail,
-                    }
+                    Self::build_document(meta, body, extract_fail)
                 })
                 .collect()
         });
@@ -268,7 +187,7 @@ impl FsSource {
             manifest.update(doc.path.clone(), doc.mtime);
         }
 
-        let extract_fails = docs.iter().filter(|d| d.extract_fail).count();
+        let extract_fails = docs.iter().filter(|doc| doc.extract_fail).count();
         tracing::info!(
             "Filesystem incremental: {} docs indexed, {} deleted ({} extract failures)",
             docs.len(),
@@ -276,5 +195,124 @@ impl FsSource {
             extract_fails
         );
         Ok((docs, deleted_ids))
+    }
+}
+
+impl crate::Source for FsSource {
+    fn name(&self) -> &'static str {
+        "filesystem"
+    }
+
+    fn index_all(&self) -> Result<Vec<Document>> {
+        let max_size = self.max_file_size_mb * 1024 * 1024;
+
+        let mut metas: Vec<FileMeta> = Vec::new();
+
+        for root in &self.roots {
+            for entry in walkdir::WalkDir::new(root)
+                .into_iter()
+                .filter_entry(|e| !self.should_exclude(e.file_name().to_string_lossy().as_ref()))
+                .filter_map(|e| e.ok())
+            {
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+
+                let path = entry.path();
+                let Ok(metadata) = std::fs::metadata(path) else {
+                    continue;
+                };
+
+                let mtime = metadata
+                    .modified()
+                    .map(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs() as i64)
+                            .unwrap_or(0)
+                    })
+                    .unwrap_or(0);
+
+                metas.push(FileMeta {
+                    path: path.to_path_buf(),
+                    path_str: path.to_string_lossy().to_string(),
+                    filename: path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                    mtime,
+                    size: metadata.len(),
+                });
+            }
+        }
+
+        tracing::info!(
+            "Filesystem: {} files found, extracting content in parallel...",
+            metas.len()
+        );
+
+        let pool = Self::build_pool();
+        let docs: Vec<Document> = pool.install(|| {
+            metas
+                .into_par_iter()
+                .map(|meta| {
+                    let (body, extract_fail) = if meta.size <= max_size {
+                        match Self::extract_content(&meta.path) {
+                            Ok(Some(text)) => (Some(text), false),
+                            Ok(None) => (None, false),
+                            Err(_) => (None, true),
+                        }
+                    } else {
+                        (None, false)
+                    };
+
+                    Self::build_document(meta, body, extract_fail)
+                })
+                .collect()
+        });
+
+        let extract_fails = docs.iter().filter(|doc| doc.extract_fail).count();
+        tracing::info!(
+            "Filesystem: indexed {} documents ({} extract failures)",
+            docs.len(),
+            extract_fails
+        );
+        Ok(docs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Source;
+
+    #[test]
+    fn test_index_all_sets_pdf_icon_and_kind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pdf_path = tmp.path().join("report.pdf");
+        std::fs::write(&pdf_path, b"%PDF-1.4\n%").unwrap();
+
+        let source = FsSource::new(vec![tmp.path().to_path_buf()], Vec::new(), 1);
+        let docs = source.index_all().unwrap();
+        let doc = docs.iter().find(|doc| doc.title == "report.pdf").unwrap();
+
+        assert_eq!(doc.icon_name.as_deref(), Some("application-pdf"));
+        assert_eq!(doc.kind_label.as_deref(), Some("PDF Document"));
+    }
+
+    #[test]
+    fn test_index_all_sets_fallback_icon_for_unknown_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file_path = tmp.path().join("mystery.unknownext");
+        std::fs::write(&file_path, b"hello").unwrap();
+
+        let source = FsSource::new(vec![tmp.path().to_path_buf()], Vec::new(), 1);
+        let docs = source.index_all().unwrap();
+        let doc = docs
+            .iter()
+            .find(|doc| doc.title == "mystery.unknownext")
+            .unwrap();
+
+        assert_eq!(doc.icon_name.as_deref(), Some("text-x-generic"));
+        assert_eq!(doc.kind_label.as_deref(), Some("Octet Stream"));
     }
 }

@@ -1,17 +1,20 @@
 //! Lupa Index — Tantivy wrapper: schema, writer, searcher.
 
 use anyhow::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tantivy::{
-    Index, IndexWriter, TantivyDocument, Term,
     collector::TopDocs,
     directory::MmapDirectory,
     doc,
     query::{BooleanQuery, FuzzyTermQuery, Occur, Query as TQuery},
-    schema::{STORED, Schema, TEXT, Value},
+    schema::{Schema, Value, STORED, STRING, TEXT},
+    Index, IndexWriter, TantivyDocument, Term,
 };
 
 use lupa_core::{Category, Document, Hit, Query};
+
+const INDEX_VERSION: u32 = 2;
+const INDEX_VERSION_FILE: &str = "index_version.txt";
 
 /// Tantivy schema fields.
 pub struct LupaSchema {
@@ -20,6 +23,8 @@ pub struct LupaSchema {
     pub category: tantivy::schema::Field,
     pub title: tantivy::schema::Field,
     pub subtitle: tantivy::schema::Field,
+    pub icon_name: tantivy::schema::Field,
+    pub kind_label: tantivy::schema::Field,
     pub body: tantivy::schema::Field,
     pub path: tantivy::schema::Field,
     pub mtime: tantivy::schema::Field,
@@ -32,10 +37,12 @@ impl LupaSchema {
     pub fn build() -> Self {
         let mut builder = tantivy::schema::Schema::builder();
 
-        let id = builder.add_text_field("id", TEXT | STORED);
+        let id = builder.add_text_field("id", STRING | STORED);
         let category = builder.add_text_field("category", TEXT | STORED);
         let title = builder.add_text_field("title", TEXT | STORED);
         let subtitle = builder.add_text_field("subtitle", STORED);
+        let icon_name = builder.add_text_field("icon_name", STORED);
+        let kind_label = builder.add_text_field("kind_label", STORED);
         let body = builder.add_text_field("body", TEXT);
         let path = builder.add_text_field("path", TEXT | STORED);
         let mtime = builder.add_i64_field("mtime", STORED);
@@ -51,6 +58,8 @@ impl LupaSchema {
             category,
             title,
             subtitle,
+            icon_name,
+            kind_label,
             body,
             path,
             mtime,
@@ -70,17 +79,25 @@ pub struct LupaIndex {
 impl LupaIndex {
     pub fn create_or_open(index_path: &str) -> Result<Self> {
         let schema = LupaSchema::build();
+        let index_dir = PathBuf::from(index_path);
+        let version_path = index_dir.join(INDEX_VERSION_FILE);
+        let meta_path = index_dir.join("meta.json");
 
-        let index = if Path::new(index_path).join("meta.json").exists() {
+        let version_matches = read_index_version(&version_path) == Some(INDEX_VERSION);
+        let has_meta = meta_path.exists();
+
+        let index = if version_matches && has_meta {
             Index::open_in_dir(index_path)?
         } else {
-            std::fs::create_dir_all(index_path)?;
+            recreate_index_dir(&index_dir, read_index_version_string(&version_path))?;
             let dir = MmapDirectory::open(index_path)?;
-            Index::create(
+            let index = Index::create(
                 dir,
                 schema.schema.clone(),
                 tantivy::IndexSettings::default(),
-            )?
+            )?;
+            std::fs::write(&version_path, INDEX_VERSION.to_string())?;
+            index
         };
 
         Ok(Self { index, schema })
@@ -94,11 +111,9 @@ impl LupaIndex {
     ) -> Result<()> {
         let s = &self.schema;
 
-        // Delete old
         let term = tantivy::Term::from_field_text(s.id, &doc.id.0);
         writer.delete_term(term);
 
-        // Insert
         let action_json = serde_json::to_string(&doc.action)?;
 
         writer.add_document(doc![
@@ -106,6 +121,8 @@ impl LupaIndex {
             s.category => doc.category.as_str(),
             s.title => doc.title.as_str(),
             s.subtitle => doc.subtitle.as_str(),
+            s.icon_name => doc.icon_name.as_deref().unwrap_or(""),
+            s.kind_label => doc.kind_label.as_deref().unwrap_or(""),
             s.body => doc.body.as_deref().unwrap_or(""),
             s.path => doc.path.as_str(),
             s.mtime => doc.mtime,
@@ -135,7 +152,6 @@ impl LupaIndex {
         let s = &self.schema;
 
         let query_obj = build_fuzzy_query(&query.text, s);
-
         let top_docs = searcher.search(&query_obj, &TopDocs::with_limit(query.limit as usize))?;
 
         let mut results = Vec::new();
@@ -144,16 +160,15 @@ impl LupaIndex {
 
             let id = doc
                 .get_first(s.id)
-                .and_then(|v| v.as_str())
+                .and_then(|value| value.as_str())
                 .unwrap_or("?")
                 .to_string();
 
-            let category_str = doc
+            let category = match doc
                 .get_first(s.category)
-                .and_then(|v| v.as_str())
-                .unwrap_or("file");
-
-            let category = match category_str {
+                .and_then(|value| value.as_str())
+                .unwrap_or("file")
+            {
                 "app" => Category::App,
                 "file" => Category::File,
                 "mail" => Category::Mail,
@@ -163,19 +178,22 @@ impl LupaIndex {
 
             let title = doc
                 .get_first(s.title)
-                .and_then(|v| v.as_str())
+                .and_then(|value| value.as_str())
                 .unwrap_or("")
                 .to_string();
 
             let subtitle = doc
                 .get_first(s.subtitle)
-                .and_then(|v| v.as_str())
+                .and_then(|value| value.as_str())
                 .unwrap_or("")
                 .to_string();
 
+            let icon_name = stored_optional_text(&doc, s.icon_name);
+            let kind_label = stored_optional_text(&doc, s.kind_label);
+
             let action_json = doc
                 .get_first(s.action)
-                .and_then(|v| v.as_str())
+                .and_then(|value| value.as_str())
                 .unwrap_or("{}");
 
             let action: lupa_core::Action = serde_json::from_str(action_json)
@@ -183,18 +201,17 @@ impl LupaIndex {
 
             let extract_fail = doc
                 .get_first(s.extract_fail)
-                .and_then(|v| v.as_bool())
+                .and_then(|value| value.as_bool())
                 .unwrap_or(false);
-
-            // Apply category boost
-            let boosted_score = score * category.ranking_boost();
 
             results.push(Hit {
                 id: lupa_core::DocId(id),
-                category,
+                category: category.clone(),
                 title,
                 subtitle,
-                score: boosted_score,
+                icon_name,
+                kind_label,
+                score: score * category.ranking_boost(),
                 action,
                 extract_fail,
             });
@@ -216,6 +233,45 @@ impl LupaIndex {
     }
 }
 
+fn stored_optional_text(doc: &TantivyDocument, field: tantivy::schema::Field) -> Option<String> {
+    let text = doc
+        .get_first(field)
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+fn read_index_version(path: &Path) -> Option<u32> {
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+fn read_index_version_string(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|contents| contents.trim().to_string())
+        .filter(|contents| !contents.is_empty())
+}
+
+fn recreate_index_dir(index_dir: &Path, old_version: Option<String>) -> Result<()> {
+    if index_dir.exists() {
+        tracing::info!(
+            path = %index_dir.display(),
+            old_version = old_version.as_deref().unwrap_or("missing"),
+            new_version = INDEX_VERSION,
+            "Wiping stale index directory"
+        );
+        std::fs::remove_dir_all(index_dir)?;
+    }
+
+    std::fs::create_dir_all(index_dir)?;
+    Ok(())
+}
+
 fn build_fuzzy_query(text: &str, s: &LupaSchema) -> Box<dyn TQuery> {
     let terms: Vec<&str> = text.split_whitespace().collect();
     if terms.is_empty() {
@@ -228,14 +284,13 @@ fn build_fuzzy_query(text: &str, s: &LupaSchema) -> Box<dyn TQuery> {
         let distance = if term.len() <= 5 { 1u8 } else { 2u8 };
 
         for field in [s.title, s.body, s.path] {
-            let t = Term::from_field_text(field, term);
-            let fq = FuzzyTermQuery::new(t, distance, true);
+            let fq = FuzzyTermQuery::new(Term::from_field_text(field, term), distance, true);
             subqueries.push((Occur::Should, Box::new(fq)));
         }
     }
 
     if subqueries.len() == 1 {
-        subqueries.pop().unwrap().1
+        subqueries.pop().expect("single query").1
     } else {
         Box::new(BooleanQuery::new(subqueries))
     }
@@ -245,6 +300,25 @@ fn build_fuzzy_query(text: &str, s: &LupaSchema) -> Box<dyn TQuery> {
 mod tests {
     use super::*;
 
+    fn sample_document(id: &str, title: &str, body: &str) -> Document {
+        Document {
+            id: lupa_core::DocId(id.to_string()),
+            category: Category::File,
+            title: title.to_string(),
+            subtitle: id.to_string(),
+            icon_name: None,
+            kind_label: None,
+            body: Some(body.to_string()),
+            path: id.trim_start_matches("fs:").to_string(),
+            mtime: 0,
+            size: 100,
+            action: lupa_core::Action::OpenFile {
+                path: id.trim_start_matches("fs:").into(),
+            },
+            extract_fail: false,
+        }
+    }
+
     #[test]
     fn test_create_and_search() {
         let tmp = tempfile::tempdir().unwrap();
@@ -252,21 +326,11 @@ mod tests {
 
         let mut index = LupaIndex::create_or_open(path).unwrap();
         let mut writer = index.writer(20_000_000).unwrap();
-
-        let doc = Document {
-            id: lupa_core::DocId("fs:/tmp/test.txt".to_string()),
-            category: Category::File,
-            title: "test.txt".to_string(),
-            subtitle: "/tmp/test.txt".to_string(),
-            body: Some("hello world this is test content".to_string()),
-            path: "/tmp/test.txt".to_string(),
-            mtime: 0,
-            size: 100,
-            action: lupa_core::Action::OpenFile {
-                path: "/tmp/test.txt".into(),
-            },
-            extract_fail: false,
-        };
+        let doc = sample_document(
+            "fs:/tmp/test.txt",
+            "test.txt",
+            "hello world this is test content",
+        );
 
         index.upsert(&doc, &mut writer).unwrap();
         index.commit(&mut writer).unwrap();
@@ -280,6 +344,8 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "test.txt");
+        assert_eq!(results[0].icon_name, None);
+        assert_eq!(results[0].kind_label, None);
     }
 
     #[test]
@@ -289,21 +355,11 @@ mod tests {
 
         let mut index = LupaIndex::create_or_open(path).unwrap();
         let mut writer = index.writer(20_000_000).unwrap();
-
-        let doc = Document {
-            id: lupa_core::DocId("fs:/tmp/delete_me.txt".to_string()),
-            category: Category::File,
-            title: "delete_me.txt".to_string(),
-            subtitle: "/tmp/delete_me.txt".to_string(),
-            body: Some("this will be deleted".to_string()),
-            path: "/tmp/delete_me.txt".to_string(),
-            mtime: 0,
-            size: 100,
-            action: lupa_core::Action::OpenFile {
-                path: "/tmp/delete_me.txt".into(),
-            },
-            extract_fail: false,
-        };
+        let doc = sample_document(
+            "fs:/tmp/delete_me.txt",
+            "delete_me.txt",
+            "this will be deleted",
+        );
 
         index.upsert(&doc, &mut writer).unwrap();
         index.commit(&mut writer).unwrap();
@@ -318,6 +374,14 @@ mod tests {
             .unwrap();
         index.commit(&mut writer).unwrap();
         writer.wait_merging_threads().unwrap();
+
+        let results = index
+            .search(&Query {
+                text: "deleted".to_string(),
+                limit: 10,
+            })
+            .unwrap();
+        assert_eq!(results.len(), 0);
     }
 
     #[test]
@@ -328,38 +392,10 @@ mod tests {
         let mut index = LupaIndex::create_or_open(path).unwrap();
         let mut writer = index.writer(20_000_000).unwrap();
 
-        let doc1 = Document {
-            id: lupa_core::DocId("fs:/tmp/same.txt".to_string()),
-            category: Category::File,
-            title: "old_title.txt".to_string(),
-            subtitle: "/tmp/same.txt".to_string(),
-            body: Some("old content".to_string()),
-            path: "/tmp/same.txt".to_string(),
-            mtime: 100,
-            size: 100,
-            action: lupa_core::Action::OpenFile {
-                path: "/tmp/same.txt".into(),
-            },
-            extract_fail: false,
-        };
+        let doc1 = sample_document("fs:/tmp/same.txt", "old_title.txt", "old content");
+        let doc2 = sample_document("fs:/tmp/same.txt", "new_title.txt", "new content");
 
         index.upsert(&doc1, &mut writer).unwrap();
-
-        let doc2 = Document {
-            id: lupa_core::DocId("fs:/tmp/same.txt".to_string()),
-            category: Category::File,
-            title: "new_title.txt".to_string(),
-            subtitle: "/tmp/same.txt".to_string(),
-            body: Some("new content".to_string()),
-            path: "/tmp/same.txt".to_string(),
-            mtime: 200,
-            size: 200,
-            action: lupa_core::Action::OpenFile {
-                path: "/tmp/same.txt".into(),
-            },
-            extract_fail: false,
-        };
-
         index.upsert(&doc2, &mut writer).unwrap();
         index.commit(&mut writer).unwrap();
 
@@ -398,20 +434,11 @@ mod tests {
         let mut writer = index.writer(20_000_000).unwrap();
 
         for i in 0..5 {
-            let doc = Document {
-                id: lupa_core::DocId(format!("fs:/tmp/doc{}.txt", i)),
-                category: Category::File,
-                title: format!("doc{}.txt", i),
-                subtitle: format!("/tmp/doc{}.txt", i),
-                body: Some(format!("content number {}", i)),
-                path: format!("/tmp/doc{}.txt", i),
-                mtime: i as i64,
-                size: 100,
-                action: lupa_core::Action::OpenFile {
-                    path: format!("/tmp/doc{}.txt", i).into(),
-                },
-                extract_fail: false,
-            };
+            let doc = sample_document(
+                &format!("fs:/tmp/doc{i}.txt"),
+                &format!("doc{i}.txt"),
+                &format!("content number {i}"),
+            );
             index.upsert(&doc, &mut writer).unwrap();
         }
         index.commit(&mut writer).unwrap();
@@ -434,20 +461,11 @@ mod tests {
         let mut writer = index.writer(20_000_000).unwrap();
 
         for i in 0..10 {
-            let doc = Document {
-                id: lupa_core::DocId(format!("fs:/tmp/lim{}.txt", i)),
-                category: Category::File,
-                title: format!("lim{}.txt", i),
-                subtitle: format!("/tmp/lim{}.txt", i),
-                body: Some(format!("limit test {}", i)),
-                path: format!("/tmp/lim{}.txt", i),
-                mtime: i as i64,
-                size: 100,
-                action: lupa_core::Action::OpenFile {
-                    path: format!("/tmp/lim{}.txt", i).into(),
-                },
-                extract_fail: false,
-            };
+            let doc = sample_document(
+                &format!("fs:/tmp/lim{i}.txt"),
+                &format!("lim{i}.txt"),
+                &format!("limit test {i}"),
+            );
             index.upsert(&doc, &mut writer).unwrap();
         }
         index.commit(&mut writer).unwrap();
@@ -459,5 +477,90 @@ mod tests {
             })
             .unwrap();
         assert!(results.len() <= 3);
+    }
+
+    #[test]
+    fn test_upsert_and_search_round_trips_icon_and_kind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let mut index = LupaIndex::create_or_open(path).unwrap();
+        let mut writer = index.writer(20_000_000).unwrap();
+        let mut doc = sample_document("fs:/tmp/roundtrip.pdf", "roundtrip.pdf", "pdf body");
+        doc.icon_name = Some("application-pdf".into());
+        doc.kind_label = Some("PDF Document".into());
+
+        index.upsert(&doc, &mut writer).unwrap();
+        index.commit(&mut writer).unwrap();
+
+        let results = index
+            .search(&Query {
+                text: "pdf".to_string(),
+                limit: 10,
+            })
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].icon_name.as_deref(), Some("application-pdf"));
+        assert_eq!(results[0].kind_label.as_deref(), Some("PDF Document"));
+    }
+
+    #[test]
+    fn test_create_or_open_rebuilds_index_when_version_file_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old_schema = {
+            let mut builder = tantivy::schema::Schema::builder();
+            let id = builder.add_text_field("id", STRING | STORED);
+            let category = builder.add_text_field("category", TEXT | STORED);
+            let title = builder.add_text_field("title", TEXT | STORED);
+            let subtitle = builder.add_text_field("subtitle", STORED);
+            let body = builder.add_text_field("body", TEXT);
+            let path = builder.add_text_field("path", TEXT | STORED);
+            let mtime = builder.add_i64_field("mtime", STORED);
+            let size = builder.add_u64_field("size", STORED);
+            let action = builder.add_text_field("action", STORED);
+            let extract_fail = builder.add_bool_field("extract_fail", STORED);
+            let schema = builder.build();
+
+            let dir = MmapDirectory::open(tmp.path()).unwrap();
+            let index =
+                Index::create(dir, schema.clone(), tantivy::IndexSettings::default()).unwrap();
+            let mut writer = index.writer::<TantivyDocument>(20_000_000).unwrap();
+            writer
+                .add_document(doc![
+                    id => "fs:/tmp/legacy.txt",
+                    category => "file",
+                    title => "legacy.txt",
+                    subtitle => "/tmp/legacy.txt",
+                    body => "legacy body",
+                    path => "/tmp/legacy.txt",
+                    mtime => 0i64,
+                    size => 1u64,
+                    action => serde_json::to_string(&lupa_core::Action::OpenFile { path: "/tmp/legacy.txt".into() }).unwrap(),
+                    extract_fail => false,
+                ])
+                .unwrap();
+            writer.commit().unwrap();
+            schema
+        };
+        assert!(tmp.path().join("meta.json").exists());
+        assert!(!tmp.path().join(INDEX_VERSION_FILE).exists());
+        drop(old_schema);
+
+        let index = LupaIndex::create_or_open(tmp.path().to_str().unwrap()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join(INDEX_VERSION_FILE))
+                .unwrap()
+                .trim(),
+            INDEX_VERSION.to_string()
+        );
+
+        let results = index
+            .search(&Query {
+                text: "legacy".to_string(),
+                limit: 10,
+            })
+            .unwrap();
+        assert!(results.is_empty());
     }
 }

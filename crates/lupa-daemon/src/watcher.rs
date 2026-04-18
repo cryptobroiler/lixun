@@ -151,12 +151,15 @@ pub fn index_file(path: &std::path::Path, max_file_size_mb: u64) -> Result<Docum
     } else {
         (None, false)
     };
+    let (icon_name, kind_label) = lupa_sources::fs::FsSource::metadata_for_path(path);
 
     Ok(Document {
         id: DocId(format!("fs:{}", path_str)),
         category: Category::File,
         title: filename,
         subtitle: path_str.clone(),
+        icon_name: Some(icon_name),
+        kind_label: Some(kind_label),
         body,
         path: path_str,
         mtime,

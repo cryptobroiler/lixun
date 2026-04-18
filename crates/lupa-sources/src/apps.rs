@@ -4,6 +4,16 @@ use anyhow::Result;
 use lupa_core::{Action, Category, DocId, Document};
 use std::path::{Path, PathBuf};
 
+struct DesktopEntry {
+    pub desktop_id: String,
+    pub name: String,
+    pub exec: String,
+    pub terminal: bool,
+    pub working_dir: Option<PathBuf>,
+    pub icon: Option<String>,
+    pub subtitle: String,
+}
+
 /// Applications source — scans XDG_DATA_DIRS for .desktop files.
 pub struct AppsSource {
     pub search_dirs: Vec<PathBuf>,
@@ -30,23 +40,22 @@ impl AppsSource {
 
         if let Ok(local) = std::env::var("XDG_DATA_HOME") {
             dirs.push(PathBuf::from(local).join("applications"));
-        } else {
-            if let Ok(home) = std::env::var("HOME") {
-                dirs.push(PathBuf::from(home).join(".local/share/applications"));
-            }
+        } else if let Ok(home) = std::env::var("HOME") {
+            dirs.push(PathBuf::from(home).join(".local/share/applications"));
         }
 
         Self { search_dirs: dirs }
     }
-}
 
-impl AppsSource {
-    fn parse_desktop_file(path: &Path) -> Option<(String, String, String, bool, Option<PathBuf>)> {
+    fn parse_desktop_file(path: &Path) -> Option<DesktopEntry> {
         let content = std::fs::read_to_string(path).ok()?;
 
         let mut name = String::new();
         let mut exec = String::new();
         let mut terminal = false;
+        let mut icon = None;
+        let mut generic_name = None;
+        let mut comment = None;
         let mut in_desktop_entry = false;
 
         for line in content.lines() {
@@ -69,15 +78,32 @@ impl AppsSource {
                     }
                     "Exec" => {
                         exec = val.trim().to_string();
-                        // Remove field codes (%f, %F, %u, etc.)
                         exec = exec
                             .split_whitespace()
-                            .filter(|s| !s.starts_with('%'))
+                            .filter(|segment| !segment.starts_with('%'))
                             .collect::<Vec<_>>()
                             .join(" ");
                     }
                     "Terminal" => {
                         terminal = val.trim().eq_ignore_ascii_case("true");
+                    }
+                    "Icon" => {
+                        let value = val.trim();
+                        if !value.is_empty() {
+                            icon = Some(value.to_string());
+                        }
+                    }
+                    "GenericName" => {
+                        let value = val.trim();
+                        if !value.is_empty() {
+                            generic_name = Some(value.to_string());
+                        }
+                    }
+                    "Comment" => {
+                        let value = val.trim();
+                        if !value.is_empty() {
+                            comment = Some(value.to_string());
+                        }
                     }
                     _ => {}
                 }
@@ -88,10 +114,20 @@ impl AppsSource {
             return None;
         }
 
-        let file_stem = path.file_stem()?.to_string_lossy().to_string();
-        let working_dir = None; // Could be parsed from Path key
+        let desktop_id = path.file_stem()?.to_string_lossy().to_string();
+        let subtitle = generic_name
+            .or(comment)
+            .unwrap_or_else(|| desktop_id.clone());
 
-        Some((file_stem, name, exec, terminal, working_dir))
+        Some(DesktopEntry {
+            desktop_id,
+            name,
+            exec,
+            terminal,
+            working_dir: None,
+            icon,
+            subtitle,
+        })
     }
 }
 
@@ -112,26 +148,30 @@ impl crate::Source for AppsSource {
                 let entry = entry?;
                 let path = entry.path();
 
-                if !path.extension().map(|e| e == "desktop").unwrap_or(false) {
+                if !path
+                    .extension()
+                    .map(|ext| ext == "desktop")
+                    .unwrap_or(false)
+                {
                     continue;
                 }
 
-                if let Some((desktop_id, name, exec, terminal, working_dir)) =
-                    Self::parse_desktop_file(&path)
-                {
+                if let Some(entry) = Self::parse_desktop_file(&path) {
                     docs.push(Document {
-                        id: DocId(format!("app:{}", desktop_id)),
+                        id: DocId(format!("app:{}", entry.desktop_id)),
                         category: Category::App,
-                        title: name,
-                        subtitle: desktop_id.clone(),
+                        title: entry.name,
+                        subtitle: entry.subtitle,
+                        icon_name: entry.icon,
+                        kind_label: Some("Application".into()),
                         body: None,
                         path: path.to_string_lossy().to_string(),
                         mtime: 0,
                         size: 0,
                         action: Action::Launch {
-                            exec,
-                            terminal,
-                            working_dir,
+                            exec: entry.exec,
+                            terminal: entry.terminal,
+                            working_dir: entry.working_dir,
                         },
                         extract_fail: false,
                     });
@@ -159,6 +199,7 @@ mod tests {
             r#"[Desktop Entry]
 Name=Firefox
 Exec=/usr/bin/firefox %u
+Icon=firefox
 Type=Application
 Terminal=false
 "#,
@@ -167,11 +208,108 @@ Terminal=false
 
         let result = AppsSource::parse_desktop_file(&path);
         assert!(result.is_some());
-        let (id, name, exec, terminal, _) = result.unwrap();
-        assert_eq!(id, "firefox");
-        assert_eq!(name, "Firefox");
-        assert_eq!(exec, "/usr/bin/firefox");
-        assert!(!terminal);
+
+        let entry = result.unwrap();
+        assert_eq!(entry.desktop_id, "firefox");
+        assert_eq!(entry.name, "Firefox");
+        assert_eq!(entry.exec, "/usr/bin/firefox");
+        assert!(!entry.terminal);
+        assert_eq!(entry.icon.as_deref(), Some("firefox"));
+    }
+
+    #[test]
+    fn test_parse_desktop_file_reads_icon() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("firefox.desktop");
+        fs::write(
+            &path,
+            r#"[Desktop Entry]
+Name=Firefox
+Exec=/usr/bin/firefox
+Icon=firefox
+"#,
+        )
+        .unwrap();
+
+        let entry = AppsSource::parse_desktop_file(&path).unwrap();
+        assert_eq!(entry.icon.as_deref(), Some("firefox"));
+    }
+
+    #[test]
+    fn test_parse_desktop_file_subtitle_precedence() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let generic_path = tmp.path().join("generic.desktop");
+        fs::write(
+            &generic_path,
+            r#"[Desktop Entry]
+Name=Generic
+Exec=/usr/bin/generic
+GenericName=Preferred Subtitle
+Comment=Fallback Subtitle
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            AppsSource::parse_desktop_file(&generic_path)
+                .unwrap()
+                .subtitle,
+            "Preferred Subtitle"
+        );
+
+        let comment_path = tmp.path().join("comment.desktop");
+        fs::write(
+            &comment_path,
+            r#"[Desktop Entry]
+Name=Comment
+Exec=/usr/bin/comment
+Comment=Comment Subtitle
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            AppsSource::parse_desktop_file(&comment_path)
+                .unwrap()
+                .subtitle,
+            "Comment Subtitle"
+        );
+
+        let fallback_path = tmp.path().join("desktop-id.desktop");
+        fs::write(
+            &fallback_path,
+            r#"[Desktop Entry]
+Name=Fallback
+Exec=/usr/bin/fallback
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            AppsSource::parse_desktop_file(&fallback_path)
+                .unwrap()
+                .subtitle,
+            "desktop-id"
+        );
+    }
+
+    #[test]
+    fn test_parse_desktop_file_absolute_icon_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("absolute.desktop");
+        fs::write(
+            &path,
+            r#"[Desktop Entry]
+Name=Firefox
+Exec=/usr/bin/firefox
+Icon=/usr/share/icons/hicolor/128x128/apps/firefox.png
+"#,
+        )
+        .unwrap();
+
+        let entry = AppsSource::parse_desktop_file(&path).unwrap();
+        assert_eq!(
+            entry.icon.as_deref(),
+            Some("/usr/share/icons/hicolor/128x128/apps/firefox.png")
+        );
     }
 
     #[test]
@@ -187,8 +325,8 @@ Exec=/usr/bin/test %f %F %u %U
         )
         .unwrap();
 
-        let (_, _, exec, _, _) = AppsSource::parse_desktop_file(&path).unwrap();
-        assert_eq!(exec, "/usr/bin/test");
+        let entry = AppsSource::parse_desktop_file(&path).unwrap();
+        assert_eq!(entry.exec, "/usr/bin/test");
     }
 
     #[test]
@@ -205,8 +343,8 @@ Terminal=true
         )
         .unwrap();
 
-        let (_, _, _, terminal, _) = AppsSource::parse_desktop_file(&path).unwrap();
-        assert!(terminal);
+        let entry = AppsSource::parse_desktop_file(&path).unwrap();
+        assert!(entry.terminal);
     }
 
     #[test]
@@ -256,9 +394,9 @@ Exec=/usr/bin/test
         )
         .unwrap();
 
-        let (_, name, exec, _, _) = AppsSource::parse_desktop_file(&path).unwrap();
-        assert_eq!(name, "Test App");
-        assert_eq!(exec, "/usr/bin/test");
+        let entry = AppsSource::parse_desktop_file(&path).unwrap();
+        assert_eq!(entry.name, "Test App");
+        assert_eq!(entry.exec, "/usr/bin/test");
     }
 
     #[test]
@@ -292,8 +430,11 @@ Exec=/usr/bin/app2
         let docs = source.index_all().unwrap();
         assert_eq!(docs.len(), 2);
 
-        let names: Vec<_> = docs.iter().map(|d| &d.title).collect();
+        let names: Vec<_> = docs.iter().map(|doc| &doc.title).collect();
         assert!(names.contains(&&"App One".to_string()));
         assert!(names.contains(&&"App Two".to_string()));
+        assert!(docs
+            .iter()
+            .all(|doc| doc.kind_label.as_deref() == Some("Application")));
     }
 }

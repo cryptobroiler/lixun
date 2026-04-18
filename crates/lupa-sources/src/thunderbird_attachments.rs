@@ -1,8 +1,10 @@
 //! Thunderbird attachments source — parse mbox files for attachments.
 
 use crate::mbox;
+use crate::mime_icons;
 use anyhow::Result;
 use lupa_core::{Action, Category, DocId, Document};
+use mime_guess::Mime;
 use std::path::PathBuf;
 
 pub struct ThunderbirdAttachmentsSource {
@@ -17,6 +19,18 @@ impl ThunderbirdAttachmentsSource {
             max_attachment_bytes,
         }
     }
+}
+
+fn attachment_metadata(mime: &str) -> (Option<String>, Option<String>) {
+    let Ok(parsed_mime) = mime.parse::<Mime>() else {
+        return (Some("mail-attachment".into()), Some("Attachment".into()));
+    };
+
+    let human = mime_icons::human_kind(&parsed_mime);
+    (
+        Some(mime_icons::mime_to_icon_name(&parsed_mime)),
+        Some(format!("Attachment · {human}")),
+    )
 }
 
 impl crate::Source for ThunderbirdAttachmentsSource {
@@ -91,6 +105,7 @@ impl crate::Source for ThunderbirdAttachmentsSource {
                             }
                         }
                     };
+                    let (icon_name, kind_label) = attachment_metadata(&part.mime);
 
                     docs.push(Document {
                         id,
@@ -100,6 +115,8 @@ impl crate::Source for ThunderbirdAttachmentsSource {
                             .subject
                             .clone()
                             .unwrap_or_else(|| "(no subject)".into()),
+                        icon_name,
+                        kind_label,
                         body,
                         path: part.mbox_path.to_string_lossy().to_string(),
                         mtime: 0,
@@ -151,5 +168,19 @@ mod tests {
                 .as_deref()
                 .is_some_and(|body| body.contains("UNIQUE_TEST_MARKER"))
         }));
+    }
+
+    #[test]
+    fn test_attachment_metadata_with_missing_mime_falls_back() {
+        let (icon_name, kind_label) = attachment_metadata("");
+        assert_eq!(icon_name.as_deref(), Some("mail-attachment"));
+        assert_eq!(kind_label.as_deref(), Some("Attachment"));
+    }
+
+    #[test]
+    fn test_attachment_metadata_with_pdf_mime_uses_helper() {
+        let (icon_name, kind_label) = attachment_metadata("application/pdf");
+        assert_eq!(icon_name.as_deref(), Some("application-pdf"));
+        assert_eq!(kind_label.as_deref(), Some("Attachment · PDF Document"));
     }
 }

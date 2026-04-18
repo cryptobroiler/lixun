@@ -5,6 +5,7 @@ pub mod fs;
 pub mod gloda;
 pub mod manifest;
 pub mod mbox;
+pub mod mime_icons;
 pub mod thunderbird_attachments;
 
 use anyhow::Result;

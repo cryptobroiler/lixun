@@ -133,6 +133,8 @@ pub fn query_messages(conn: &Connection, last_key: u64) -> rusqlite::Result<Vec<
             category: Category::Mail,
             title: subject.unwrap_or_else(|| "(no subject)".into()),
             subtitle: author.unwrap_or_default(),
+            icon_name: Some("mail-message".into()),
+            kind_label: Some("Email".into()),
             body: body_opt.filter(|s| !s.is_empty()),
             path: format!("thunderbird:{}", id),
             mtime: 0,
@@ -194,8 +196,8 @@ impl crate::Source for GlodaSource {
 mod tests {
     use super::*;
     use rusqlite::Connection;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     fn setup_schema(conn: &Connection) {
         conn.execute_batch(
@@ -318,7 +320,11 @@ mod tests {
             |e: &i32| *e == 5,
             move || {
                 let n = c.fetch_add(1, Ordering::SeqCst);
-                if n < 2 { Err(5) } else { Ok(42) }
+                if n < 2 {
+                    Err(5)
+                } else {
+                    Ok(42)
+                }
             },
         );
         assert_eq!(result.unwrap(), 42);
