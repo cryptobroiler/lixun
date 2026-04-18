@@ -11,6 +11,7 @@ mod attachments;
 mod factory;
 mod icons;
 mod ipc;
+mod keymap;
 mod status;
 mod window;
 
