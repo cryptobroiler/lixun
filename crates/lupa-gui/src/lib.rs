@@ -9,7 +9,9 @@ use gtk::prelude::*;
 mod actions;
 mod attachments;
 mod factory;
+mod icons;
 mod ipc;
+mod status;
 mod window;
 
 pub fn run() -> Result<()> {

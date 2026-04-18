@@ -5,17 +5,22 @@ use std::cell::RefCell;
 use gtk::prelude::*;
 use lupa_core::{Category, Hit};
 
-pub(crate) fn category_icon(cat: &Category) -> &'static str {
-    match cat {
-        Category::App => "application-x-executable",
-        Category::File => "text-x-generic",
-        Category::Mail => "mail-message",
-        Category::Attachment => "mail-attachment",
-    }
-}
+use crate::icons::resolve_icon;
+
+pub(crate) const ICON_SIZE_NORMAL: i32 = 32;
+pub(crate) const ICON_SIZE_TOP_HIT: i32 = 48;
 
 pub(crate) fn add_css_class<W: gtk::prelude::WidgetExt>(widget: &W, class: &str) {
     widget.style_context().add_class(class);
+}
+
+fn category_kind_fallback(cat: &Category) -> &'static str {
+    match cat {
+        Category::App => "Application",
+        Category::File => "File",
+        Category::Mail => "Email",
+        Category::Attachment => "Attachment",
+    }
 }
 
 thread_local! {
@@ -45,11 +50,11 @@ pub(crate) fn create_list_factory() -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
 
     factory.connect_setup(move |_, list_item| {
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         add_css_class(&row, "lupa-hit");
 
         let icon = gtk::Image::new();
-        icon.set_icon_size(gtk::IconSize::Large);
+        icon.set_pixel_size(ICON_SIZE_NORMAL);
         icon.set_margin_start(4);
         row.append(&icon);
 
@@ -70,10 +75,10 @@ pub(crate) fn create_list_factory() -> gtk::SignalListItemFactory {
 
         row.append(&text_box);
 
-        let badge = gtk::Label::new(None);
-        badge.set_xalign(1.0);
-        add_css_class(&badge, "lupa-badge");
-        row.append(&badge);
+        let kind = gtk::Label::new(None);
+        kind.set_xalign(1.0);
+        add_css_class(&kind, "lupa-kind");
+        row.append(&kind);
 
         let list_item = list_item
             .downcast_ref::<gtk::ListItem>()
@@ -86,6 +91,9 @@ pub(crate) fn create_list_factory() -> gtk::SignalListItemFactory {
             .downcast_ref::<gtk::ListItem>()
             .expect("ListItem expected");
 
+        let position = list_item.position();
+        let is_top_hit = position == 0;
+
         if let Some(str_obj) = list_item
             .item()
             .and_then(|i| i.downcast::<gtk::StringObject>().ok())
@@ -94,8 +102,30 @@ pub(crate) fn create_list_factory() -> gtk::SignalListItemFactory {
             with_cached_hits(|hits| {
                 if let Some(hit) = hits.iter().find(|h| h.id.0 == doc_id) {
                     let row = list_item.child().and_downcast::<gtk::Box>().unwrap();
+
+                    if is_top_hit {
+                        row.add_css_class("lupa-top-hit");
+                    } else {
+                        row.remove_css_class("lupa-top-hit");
+                    }
+
                     let icon = row.first_child().and_downcast::<gtk::Image>().unwrap();
-                    icon.set_icon_name(Some(category_icon(&hit.category)));
+                    let icon_size = if is_top_hit {
+                        ICON_SIZE_TOP_HIT
+                    } else {
+                        ICON_SIZE_NORMAL
+                    };
+                    icon.set_pixel_size(icon_size);
+                    if let Some(paintable) = resolve_icon(hit, icon_size) {
+                        icon.set_paintable(Some(&paintable));
+                    } else {
+                        icon.set_icon_name(Some(match hit.category {
+                            Category::App => "application-x-executable",
+                            Category::File => "text-x-generic",
+                            Category::Mail => "mail-message",
+                            Category::Attachment => "mail-attachment",
+                        }));
+                    }
 
                     let text_box = icon.next_sibling().and_downcast::<gtk::Box>().unwrap();
                     let title = text_box.first_child().and_downcast::<gtk::Label>().unwrap();
@@ -104,11 +134,15 @@ pub(crate) fn create_list_factory() -> gtk::SignalListItemFactory {
                     let subtitle = title.next_sibling().and_downcast::<gtk::Label>().unwrap();
                     subtitle.set_text(&hit.subtitle);
 
-                    let badge = text_box
+                    let kind = text_box
                         .next_sibling()
                         .and_downcast::<gtk::Label>()
                         .unwrap();
-                    badge.set_text(hit.category.as_str());
+                    let kind_text = hit
+                        .kind_label
+                        .clone()
+                        .unwrap_or_else(|| category_kind_fallback(&hit.category).to_string());
+                    kind.set_text(&kind_text);
                 }
             });
         }

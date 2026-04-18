@@ -2,14 +2,17 @@
 //! record-click helper.
 
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
-use lupa_core::Hit;
+use lupa_core::{Calculation, Hit};
 use lupa_ipc::{socket_path, Request, Response, PROTOCOL_VERSION};
 
 pub(crate) struct IpcClient {
     pub(crate) request_tx: mpsc::Sender<(String, u32)>,
     pub(crate) responses: Arc<Mutex<Vec<Hit>>>,
+    pub(crate) calculation: Arc<Mutex<Option<Calculation>>>,
+    pub(crate) response_epoch: Arc<AtomicU64>,
 }
 
 impl Clone for IpcClient {
@@ -17,6 +20,8 @@ impl Clone for IpcClient {
         Self {
             request_tx: self.request_tx.clone(),
             responses: Arc::clone(&self.responses),
+            calculation: Arc::clone(&self.calculation),
+            response_epoch: Arc::clone(&self.response_epoch),
         }
     }
 }
@@ -24,7 +29,11 @@ impl Clone for IpcClient {
 pub(crate) fn start_ipc_thread() -> IpcClient {
     let (tx, rx) = mpsc::channel::<(String, u32)>();
     let responses: Arc<Mutex<Vec<Hit>>> = Arc::new(Mutex::new(Vec::new()));
+    let calculation: Arc<Mutex<Option<Calculation>>> = Arc::new(Mutex::new(None));
+    let response_epoch: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
     let resp_clone = Arc::clone(&responses);
+    let calc_clone = Arc::clone(&calculation);
+    let epoch_clone = Arc::clone(&response_epoch);
 
     std::thread::spawn(move || {
         while let Ok((query, limit)) = rx.recv() {
@@ -82,14 +91,19 @@ pub(crate) fn start_ipc_thread() -> IpcClient {
                     if let Ok(mut r) = resp_clone.lock() {
                         *r = hits;
                     }
+                    if let Ok(mut c) = calc_clone.lock() {
+                        *c = None;
+                    }
+                    epoch_clone.fetch_add(1, Ordering::SeqCst);
                 }
-                Ok(Response::HitsWithExtras {
-                    hits,
-                    calculation: _,
-                }) => {
+                Ok(Response::HitsWithExtras { hits, calculation }) => {
                     if let Ok(mut r) = resp_clone.lock() {
                         *r = hits;
                     }
+                    if let Ok(mut c) = calc_clone.lock() {
+                        *c = calculation;
+                    }
+                    epoch_clone.fetch_add(1, Ordering::SeqCst);
                 }
                 Ok(Response::Error(msg)) => {
                     tracing::error!("Daemon error: {}", msg);
@@ -105,6 +119,8 @@ pub(crate) fn start_ipc_thread() -> IpcClient {
     IpcClient {
         request_tx: tx,
         responses,
+        calculation,
+        response_epoch,
     }
 }
 

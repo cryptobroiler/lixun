@@ -2,6 +2,7 @@
 //! bindings, animations, Toggle ping to the daemon.
 
 use std::io::Write;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -14,6 +15,9 @@ use lupa_ipc::{socket_path, Request, PROTOCOL_VERSION};
 use crate::actions::{copy_to_clipboard, execute_action, execute_secondary_action};
 use crate::factory::{add_css_class, create_list_factory, update_results, with_cached_hits};
 use crate::ipc::{send_record_click, start_ipc_thread};
+use crate::status::StatusBar;
+
+const EMBEDDED_STYLESHEET: &str = include_str!("../style.css");
 
 pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     let ipc = start_ipc_thread();
@@ -55,15 +59,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         provider.load_from_path(&path);
         tracing::info!("Loaded external style.css from {:?}", path);
     } else {
-        provider.load_from_data(
-            ".lupa-window { background-color: rgba(30,30,35,0.85); border-radius: 12px; } \
-             .lupa-entry { font-size: 28px; padding: 14px 20px; background-color: rgba(20,20,25,0.9); color: #e0e0e0; border: none; border-radius: 8px; } \
-             .lupa-results { background-color: transparent; } \
-             .lupa-hit { padding: 8px 16px; border-radius: 6px; } \
-             .lupa-title { font-weight: bold; color: #f0f0f0; } \
-             .lupa-subtitle { color: #888888; font-size: 12px; } \
-             .lupa-badge { color: #666666; font-size: 10px; }"
-        );
+        provider.load_from_data(EMBEDDED_STYLESHEET);
     }
     gtk::style_context_add_provider_for_display(
         &gtk::gdk::Display::default().unwrap(),
@@ -103,15 +99,46 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         .factory(&create_list_factory())
         .build();
     scrolled.set_child(Some(&list_view));
+
+    let status_bar = std::rc::Rc::new(StatusBar::new());
+    vbox.append(status_bar.widget());
+
     window.set_child(Some(&vbox));
 
     let model2 = model.clone();
     let responses = Arc::clone(&ipc.responses);
+    let calculation = Arc::clone(&ipc.calculation);
+    let epoch = Arc::clone(&ipc.response_epoch);
+    let last_epoch = std::rc::Rc::new(std::cell::Cell::new(0u64));
+    let status_for_poll = std::rc::Rc::clone(&status_bar);
+    let last_query_for_poll = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+    let last_query_poll_clone = last_query_for_poll.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
-        let mut hits = responses.lock().unwrap();
-        if !hits.is_empty() {
-            let snapshot = std::mem::take(&mut *hits);
-            update_results(&model2, &snapshot);
+        let current = epoch.load(Ordering::SeqCst);
+        if current != last_epoch.get() {
+            last_epoch.set(current);
+            let hits_snapshot = {
+                let mut hits = responses.lock().unwrap();
+                std::mem::take(&mut *hits)
+            };
+            let calc_snapshot = {
+                let mut c = calculation.lock().unwrap();
+                c.take()
+            };
+            update_results(&model2, &hits_snapshot);
+
+            if let Some(calc) = calc_snapshot.as_ref() {
+                status_for_poll.show_calculation(calc);
+            } else if hits_snapshot.is_empty() {
+                let q = last_query_poll_clone.borrow().clone();
+                if !q.is_empty() {
+                    status_for_poll.show_empty(&q);
+                } else {
+                    status_for_poll.hide();
+                }
+            } else {
+                status_for_poll.hide();
+            }
         }
         glib::ControlFlow::Continue
     });
@@ -120,19 +147,34 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         Arc::new(Mutex::new((String::new(), Instant::now())));
     let ipc_for_debounce = ipc.clone();
     let debounce_state_for_timeout = Arc::clone(&debounce_state);
+    let status_for_debounce = std::rc::Rc::clone(&status_bar);
+    let last_query_for_debounce = last_query_for_poll.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
         let mut state = debounce_state_for_timeout.lock().unwrap();
         if !state.0.is_empty() && state.1.elapsed() >= std::time::Duration::from_millis(40) {
-            let _ = ipc_for_debounce.request_tx.send((state.0.clone(), 30));
+            let q = state.0.clone();
+            *last_query_for_debounce.borrow_mut() = q.clone();
+            status_for_debounce.show_loading();
+            let _ = ipc_for_debounce.request_tx.send((q, 30));
             state.0.clear();
         }
         glib::ControlFlow::Continue
     });
     let debounce_state_for_entry = Arc::clone(&debounce_state);
+    let status_for_entry = std::rc::Rc::clone(&status_bar);
+    let model_for_entry = model.clone();
     entry.connect_changed(move |e| {
+        let text = e.text().to_string();
         let mut state = debounce_state_for_entry.lock().unwrap();
-        state.0 = e.text().to_string();
+        state.0 = text.clone();
         state.1 = Instant::now();
+        if text.is_empty() {
+            let n = model_for_entry.n_items();
+            for _ in 0..n {
+                model_for_entry.remove(0);
+            }
+            status_for_entry.hide();
+        }
     });
 
     let key_controller = gtk::EventControllerKey::new();
