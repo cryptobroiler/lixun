@@ -211,7 +211,7 @@ fn install_drag_source(row: &gtk::Box, hit: &Hit) {
     let content = gdk::ContentProvider::for_value(&file.to_value());
     drag.set_content(Some(&content));
 
-    let cat = hit.category.clone();
+    let cat = hit.category;
     let hit_for_icon = hit.clone();
     drag.connect_prepare(move |source, _x, _y| {
         if let Some(paintable) = resolve_icon(&hit_for_icon, ICON_SIZE_NORMAL) {

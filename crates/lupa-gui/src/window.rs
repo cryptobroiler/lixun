@@ -8,11 +8,14 @@ use std::sync::Arc;
 use anyhow::Result;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, LayerShell};
+use lupa_core::Category;
 use lupa_ipc::{socket_path, Request, PROTOCOL_VERSION};
 
-use crate::factory::{add_css_class, create_list_factory, update_results};
+use crate::factory::{add_css_class, create_list_factory, update_results, with_cached_hits};
 use crate::ipc::start_ipc_thread;
 use crate::status::StatusBar;
+
+pub(crate) type CategoryFilter = std::rc::Rc<std::cell::Cell<Option<Category>>>;
 
 const EMBEDDED_STYLESHEET: &str = include_str!("../style.css");
 
@@ -118,6 +121,10 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     add_css_class(&entry, "lupa-entry");
     vbox.append(&entry);
 
+    let current_category: CategoryFilter = std::rc::Rc::new(std::cell::Cell::new(None));
+    let chips = build_category_chips(&current_category);
+    vbox.append(&chips.container);
+
     let scrolled = gtk::ScrolledWindow::builder()
         .vexpand(true)
         .min_content_height(60)
@@ -127,8 +134,30 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     vbox.append(&scrolled);
 
     let model = gtk::StringList::new(&[]);
+
+    let filter = gtk::CustomFilter::new({
+        let current = std::rc::Rc::clone(&current_category);
+        move |obj| {
+            let Some(filter_cat) = current.get() else {
+                return true;
+            };
+            let Some(str_obj) = obj.downcast_ref::<gtk::StringObject>() else {
+                return true;
+            };
+            let doc_id = str_obj.string().to_string();
+            with_cached_hits(|hits| {
+                hits.iter()
+                    .find(|h| h.id.0 == doc_id)
+                    .map(|h| h.category == filter_cat)
+                    .unwrap_or(true)
+            })
+        }
+    });
+
+    let filter_model = gtk::FilterListModel::new(Some(model.clone()), Some(filter.clone()));
+
     let selection = gtk::SingleSelection::builder()
-        .model(&model)
+        .model(&filter_model)
         .autoselect(false)
         .build();
 
@@ -137,6 +166,11 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         .factory(&create_list_factory())
         .build();
     scrolled.set_child(Some(&list_view));
+
+    chips.wire_toggle({
+        let filter = filter.clone();
+        move || filter.changed(gtk::FilterChange::Different)
+    });
 
     let status_bar = std::rc::Rc::new(StatusBar::new());
     vbox.append(status_bar.widget());
@@ -218,7 +252,15 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         *pending_source_for_entry.borrow_mut() = Some(id);
     });
 
-    crate::keymap::install_keyboard_handler(&window, &list_view, &entry, &selection, &model);
+    let chips_rc = std::rc::Rc::new(chips);
+    crate::keymap::install_keyboard_handler(
+        &window,
+        &list_view,
+        &entry,
+        &selection,
+        &filter_model,
+        std::rc::Rc::clone(&chips_rc),
+    );
 
     install_drag_handler(&window);
 
@@ -248,6 +290,83 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
 
     tracing::info!("Lupa GUI window shown");
     Ok(())
+}
+
+pub(crate) struct CategoryChips {
+    pub(crate) container: gtk::Box,
+    pub(crate) buttons: [gtk::ToggleButton; 5],
+}
+
+impl CategoryChips {
+    pub(crate) fn wire_toggle<F>(&self, on_change: F)
+    where
+        F: Fn() + 'static + Clone,
+    {
+        for button in &self.buttons {
+            let cb = on_change.clone();
+            button.connect_toggled(move |_| {
+                cb();
+            });
+        }
+    }
+
+    pub(crate) fn activate_index(&self, index: usize) {
+        if let Some(btn) = self.buttons.get(index) {
+            btn.set_active(true);
+        }
+    }
+}
+
+fn build_category_chips(current: &CategoryFilter) -> CategoryChips {
+    let container = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    container.set_margin_top(4);
+    container.set_margin_bottom(2);
+    add_css_class(&container, "lupa-chips");
+
+    let labels = [
+        ("All", None),
+        ("Apps", Some(Category::App)),
+        ("Files", Some(Category::File)),
+        ("Mail", Some(Category::Mail)),
+        ("Attachments", Some(Category::Attachment)),
+    ];
+
+    let mut buttons: Vec<gtk::ToggleButton> = Vec::with_capacity(5);
+    let group_anchor: Option<gtk::ToggleButton> = None;
+    let mut group_anchor = group_anchor;
+
+    for (label, _cat) in &labels {
+        let b = gtk::ToggleButton::with_label(label);
+        add_css_class(&b, "lupa-chip");
+        if let Some(anchor) = group_anchor.as_ref() {
+            b.set_group(Some(anchor));
+        } else {
+            group_anchor = Some(b.clone());
+        }
+        container.append(&b);
+        buttons.push(b);
+    }
+
+    buttons[0].set_active(true);
+
+    for (button, (_, cat)) in buttons.iter().zip(labels.iter()) {
+        let current_clone = std::rc::Rc::clone(current);
+        let cat = *cat;
+        button.connect_toggled(move |b| {
+            if b.is_active() {
+                current_clone.set(cat);
+            }
+        });
+    }
+
+    let buttons_arr: [gtk::ToggleButton; 5] = buttons
+        .try_into()
+        .expect("exactly 5 chip buttons constructed");
+
+    CategoryChips {
+        container,
+        buttons: buttons_arr,
+    }
 }
 
 fn install_drag_handler(window: &gtk::ApplicationWindow) {

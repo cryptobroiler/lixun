@@ -230,7 +230,7 @@ impl LupaIndex {
 
             results.push(Hit {
                 id: lupa_core::DocId(id),
-                category: category.clone(),
+                category,
                 title,
                 subtitle,
                 icon_name,
