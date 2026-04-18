@@ -72,50 +72,32 @@ pub fn split_mbox_messages(mbox_bytes: &[u8]) -> Vec<(usize, &[u8])> {
         return results;
     }
 
-    let mut msg_start: Option<usize> = None;
+    let mut starts: Vec<usize> = Vec::new();
+    if mbox_bytes.starts_with(b"From ") {
+        starts.push(0);
+    }
     let mut i = 0;
-    while i < mbox_bytes.len() {
-        let is_from_line = if i == 0 {
-            mbox_bytes.starts_with(b"From ")
-        } else if i >= 2
-            && &mbox_bytes[i - 2..i] == b"\n\n"
-            && mbox_bytes[i..].starts_with(b"From ")
-        {
-            true
-        } else if i >= 4
-            && &mbox_bytes[i - 4..i] == b"\r\n\r\n"
-            && mbox_bytes[i..].starts_with(b"From ")
-        {
-            true
+    while i + 5 < mbox_bytes.len() {
+        if mbox_bytes[i] == b'\n' && &mbox_bytes[i + 1..i + 6] == b"From " {
+            starts.push(i + 1);
+            i += 6;
         } else {
-            false
-        };
-
-        if is_from_line {
-            if let Some(start) = msg_start {
-                let end = if i >= 4 && &mbox_bytes[i - 4..i] == b"\r\n\r\n" {
-                    i - 4
-                } else if i >= 2 && &mbox_bytes[i - 2..i] == b"\n\n" {
-                    i - 2
-                } else {
-                    i
-                };
-                if end > start {
-                    results.push((start, &mbox_bytes[start..end]));
-                }
-            }
-            msg_start = Some(i);
+            i += 1;
         }
-
-        i += 1;
     }
 
-    if let Some(start) = msg_start {
-        results.push((start, &mbox_bytes[start..]));
-    }
-
-    if results.is_empty() {
+    if starts.is_empty() {
         results.push((0, mbox_bytes));
+        return results;
+    }
+
+    for (idx, &start) in starts.iter().enumerate() {
+        let end = if idx + 1 < starts.len() {
+            starts[idx + 1]
+        } else {
+            mbox_bytes.len()
+        };
+        results.push((start, &mbox_bytes[start..end]));
     }
 
     results
@@ -424,10 +406,35 @@ mod tests {
     }
 
     #[test]
-    fn test_split_mbox_messages_from_in_body() {
-        let mbox = b"From a@example.com Wed Jan 01 00:00:00 2025\nSubject: One\n\nBody line\nFrom nothing\nStill body\n";
+    fn test_split_mbox_messages_escaped_from_in_body_single() {
+        // Well-formed mbox writers escape body lines starting with "From " as ">From ".
+        // The escaped form must NOT be treated as a message boundary.
+        let mbox = b"From a@example.com Wed Jan 01 00:00:00 2025\nSubject: One\n\nBody line\n>From nothing\nStill body\n";
         let messages = split_mbox_messages(mbox);
         assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn test_split_mbox_standard_format_no_blank_line() {
+        // Standard mbox (RFC 4155): messages separated by just \n before "From "
+        let mbox = b"From a@example.com Wed Jan 01 00:00:00 2025\nSubject: One\n\nBody one\nFrom b@example.com Wed Jan 01 00:00:01 2025\nSubject: Two\n\nBody two\n";
+        let messages = split_mbox_messages(mbox);
+        assert_eq!(messages.len(), 2);
+    }
+
+    #[test]
+    fn test_split_mbox_standard_format_crlf_no_blank_line() {
+        let mbox = b"From a@example.com Wed Jan 01 00:00:00 2025\r\nSubject: One\r\n\r\nBody one\r\nFrom b@example.com Wed Jan 01 00:00:01 2025\r\nSubject: Two\r\n\r\nBody two\r\n";
+        let messages = split_mbox_messages(mbox);
+        assert_eq!(messages.len(), 2);
+    }
+
+    #[test]
+    fn test_split_mbox_escaped_from_in_body_not_split() {
+        // ">From " in body must NOT be treated as new message (it's an escaped "From")
+        let mbox = b"From a@example.com Wed Jan 01 00:00:00 2025\nSubject: One\n\nBody\n>From hacker@example.com\nMore body\nFrom b@example.com Wed Jan 01 00:00:01 2025\nSubject: Two\n\nBody two\n";
+        let messages = split_mbox_messages(mbox);
+        assert_eq!(messages.len(), 2);
     }
 
     #[test]
