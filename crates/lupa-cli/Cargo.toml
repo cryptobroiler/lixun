@@ -18,6 +18,11 @@ serde_json.workspace = true
 bytes.workspace = true
 tokio-util.workspace = true
 
+[dev-dependencies]
+lupa-index = { path = "../lupa-index" }
+lupa-sources = { path = "../lupa-sources" }
+tempfile = "3"
+
 [[test]]
 name = "it"
 path = "../../tests/it/main.rs"
