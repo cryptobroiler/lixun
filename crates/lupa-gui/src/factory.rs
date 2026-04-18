@@ -2,10 +2,14 @@
 
 use std::cell::RefCell;
 
+use gtk::gdk;
+use gtk::gio;
 use gtk::prelude::*;
-use lupa_core::{Category, Hit};
+use lupa_core::{Action, Category, Hit};
 
+use crate::actions::{copy_to_clipboard, execute_action, execute_secondary_action, quick_look};
 use crate::icons::resolve_icon;
+use crate::ipc::send_record_click;
 
 pub(crate) const ICON_SIZE_NORMAL: i32 = 32;
 pub(crate) const ICON_SIZE_TOP_HIT: i32 = 48;
@@ -43,6 +47,209 @@ pub(crate) fn update_results(model: &gtk::StringList, hits: &[Hit]) {
     cache_hits(hits.to_vec());
     for hit in hits {
         model.append(&hit.id.0);
+    }
+}
+
+fn build_menu_for(category: &Category) -> gio::Menu {
+    let menu = gio::Menu::new();
+    match category {
+        Category::App => {
+            menu.append(Some("Launch"), Some("row.open"));
+            menu.append(Some("Copy name"), Some("row.copy"));
+        }
+        Category::File => {
+            menu.append(Some("Open"), Some("row.open"));
+            menu.append(Some("Reveal in File Manager"), Some("row.reveal"));
+            menu.append(Some("Copy path"), Some("row.copy"));
+            menu.append(Some("Quick Look"), Some("row.quicklook"));
+            menu.append(Some("Get Info"), Some("row.info"));
+        }
+        Category::Mail => {
+            menu.append(Some("Open in Thunderbird"), Some("row.open"));
+            menu.append(Some("Copy subject"), Some("row.copy"));
+        }
+        Category::Attachment => {
+            menu.append(Some("Open"), Some("row.open"));
+            menu.append(Some("Quick Look"), Some("row.quicklook"));
+            menu.append(Some("Copy filename"), Some("row.copy"));
+            menu.append(Some("Open parent mail"), Some("row.reveal"));
+        }
+    }
+    menu
+}
+
+fn install_action_group(row: &gtk::Box, hit: &Hit) {
+    let group = gio::SimpleActionGroup::new();
+
+    let open_hit = hit.clone();
+    let open = gio::SimpleAction::new("open", None);
+    open.connect_activate(move |_, _| {
+        send_record_click(&open_hit.id.0);
+        if let Err(e) = execute_action(&open_hit) {
+            tracing::error!("Action failed: {}", e);
+        }
+    });
+    group.add_action(&open);
+
+    let reveal_hit = hit.clone();
+    let reveal = gio::SimpleAction::new("reveal", None);
+    reveal.connect_activate(move |_, _| {
+        if let Err(e) = execute_secondary_action(&reveal_hit) {
+            tracing::error!("Reveal failed: {}", e);
+        }
+    });
+    group.add_action(&reveal);
+
+    let copy_hit = hit.clone();
+    let copy = gio::SimpleAction::new("copy", None);
+    copy.connect_activate(move |_, _| {
+        copy_to_clipboard(&copy_hit);
+    });
+    group.add_action(&copy);
+
+    let quick_hit = hit.clone();
+    let quick = gio::SimpleAction::new("quicklook", None);
+    quick.connect_activate(move |_, _| {
+        if let Err(e) = quick_look(&quick_hit) {
+            tracing::error!("Quick look failed: {}", e);
+        }
+    });
+    group.add_action(&quick);
+
+    let info_hit = hit.clone();
+    let info_row = row.clone();
+    let info = gio::SimpleAction::new("info", None);
+    info.connect_activate(move |_, _| {
+        show_get_info_popover(&info_row, &info_hit);
+    });
+    group.add_action(&info);
+
+    row.insert_action_group("row", Some(&group));
+}
+
+fn show_get_info_popover(anchor: &gtk::Box, hit: &Hit) {
+    let popover = gtk::Popover::new();
+    popover.set_parent(anchor);
+    popover.set_has_arrow(true);
+
+    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    vbox.set_margin_top(8);
+    vbox.set_margin_bottom(8);
+    vbox.set_margin_start(12);
+    vbox.set_margin_end(12);
+
+    let title = gtk::Label::new(Some(&hit.title));
+    title.set_xalign(0.0);
+    add_css_class(&title, "lupa-title");
+    vbox.append(&title);
+
+    let path_label = gtk::Label::new(Some(&hit.subtitle));
+    path_label.set_xalign(0.0);
+    path_label.set_selectable(true);
+    path_label.set_wrap(true);
+    add_css_class(&path_label, "lupa-subtitle");
+    vbox.append(&path_label);
+
+    if let Some(kind) = hit.kind_label.as_deref() {
+        let kind_label = gtk::Label::new(Some(&format!("Kind: {}", kind)));
+        kind_label.set_xalign(0.0);
+        add_css_class(&kind_label, "lupa-subtitle");
+        vbox.append(&kind_label);
+    }
+
+    popover.set_child(Some(&vbox));
+    popover.popup();
+}
+
+fn hit_file_path(hit: &Hit) -> Option<std::path::PathBuf> {
+    match &hit.action {
+        Action::OpenFile { path } | Action::ShowInFileManager { path } => Some(path.clone()),
+        _ => None,
+    }
+}
+
+fn clear_row_controllers(row: &gtk::Box) {
+    let controllers = row.observe_controllers();
+    let n = controllers.n_items();
+    let mut to_remove: Vec<gtk::EventController> = Vec::new();
+    for i in 0..n {
+        if let Some(ctrl) = controllers.item(i).and_downcast::<gtk::EventController>() {
+            to_remove.push(ctrl);
+        }
+    }
+    for c in to_remove {
+        row.remove_controller(&c);
+    }
+}
+
+fn install_right_click_popover(row: &gtk::Box, category: &Category) {
+    let menu = build_menu_for(category);
+    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+    popover.set_parent(row);
+    popover.set_has_arrow(false);
+
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gdk::BUTTON_SECONDARY);
+    let popover_for_gesture = popover.clone();
+    gesture.connect_pressed(move |_g, _n_press, x, y| {
+        let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+        popover_for_gesture.set_pointing_to(Some(&rect));
+        popover_for_gesture.popup();
+    });
+    row.add_controller(gesture);
+}
+
+fn install_drag_source(row: &gtk::Box, hit: &Hit) {
+    let Some(path) = hit_file_path(hit) else {
+        return;
+    };
+
+    let drag = gtk::DragSource::new();
+    drag.set_actions(gdk::DragAction::COPY);
+
+    let file = gio::File::for_path(&path);
+    let content = gdk::ContentProvider::for_value(&file.to_value());
+    drag.set_content(Some(&content));
+
+    let cat = hit.category.clone();
+    let hit_for_icon = hit.clone();
+    drag.connect_prepare(move |source, _x, _y| {
+        if let Some(paintable) = resolve_icon(&hit_for_icon, ICON_SIZE_NORMAL) {
+            source.set_icon(Some(&paintable), 0, 0);
+        }
+        let _ = cat;
+        None
+    });
+
+    row.add_controller(drag);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_for_file_has_expected_items() {
+        let menu = build_menu_for(&Category::File);
+        assert_eq!(menu.n_items(), 5);
+    }
+
+    #[test]
+    fn menu_for_app_has_expected_items() {
+        let menu = build_menu_for(&Category::App);
+        assert_eq!(menu.n_items(), 2);
+    }
+
+    #[test]
+    fn menu_for_mail_has_expected_items() {
+        let menu = build_menu_for(&Category::Mail);
+        assert_eq!(menu.n_items(), 2);
+    }
+
+    #[test]
+    fn menu_for_attachment_has_expected_items() {
+        let menu = build_menu_for(&Category::Attachment);
+        assert_eq!(menu.n_items(), 4);
     }
 }
 
@@ -143,6 +350,13 @@ pub(crate) fn create_list_factory() -> gtk::SignalListItemFactory {
                         .clone()
                         .unwrap_or_else(|| category_kind_fallback(&hit.category).to_string());
                     kind.set_text(&kind_text);
+
+                    clear_row_controllers(&row);
+                    install_action_group(&row, hit);
+                    install_right_click_popover(&row, &hit.category);
+                    if matches!(hit.category, Category::File | Category::Attachment) {
+                        install_drag_source(&row, hit);
+                    }
                 }
             });
         }

@@ -186,6 +186,95 @@ pub(crate) fn execute_secondary_action(hit: &Hit) -> Result<()> {
     }
 }
 
+pub(crate) fn quick_look(hit: &Hit) -> Result<()> {
+    let preview_path = match &hit.action {
+        Action::OpenFile { path } | Action::ShowInFileManager { path } => path.clone(),
+        Action::OpenAttachment {
+            mbox_path,
+            byte_offset,
+            length,
+            encoding,
+            suggested_filename,
+            ..
+        } => extract_attachment_to_temp(
+            mbox_path,
+            *byte_offset,
+            *length,
+            encoding,
+            suggested_filename,
+        )?,
+        _ => return Ok(()),
+    };
+
+    let bin = std::env::var("LUPA_QUICK_LOOK").ok().or_else(|| {
+        ["gnome-sushi", "sushi"]
+            .iter()
+            .find_map(|name| which(name).map(|_| (*name).to_string()))
+    });
+
+    if let Some(cmd) = bin {
+        std::process::Command::new(&cmd)
+            .arg(&preview_path)
+            .spawn()?;
+    } else {
+        std::process::Command::new("xdg-open")
+            .arg(&preview_path)
+            .spawn()?;
+    }
+    Ok(())
+}
+
+fn which(name: &str) -> Option<std::path::PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn extract_attachment_to_temp(
+    mbox_path: &std::path::Path,
+    byte_offset: u64,
+    length: u64,
+    encoding: &str,
+    suggested_filename: &str,
+) -> Result<std::path::PathBuf> {
+    use std::io::{Read, Seek, SeekFrom};
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let xdg_dir_str = std::env::var("XDG_RUNTIME_DIR").ok();
+    let xdg_dir = xdg_dir_str.as_ref().map(std::path::Path::new);
+    let runtime_dir = secure_runtime_dir_from_env(xdg_dir)?;
+    let dir = runtime_dir.join("lupa/attachments");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+
+    sweep_stale_attachments(&dir, std::time::Duration::from_secs(600));
+
+    let mut f = std::fs::File::open(mbox_path)?;
+    f.seek(SeekFrom::Start(byte_offset))?;
+    let mut raw = vec![0u8; length as usize];
+    f.read_exact(&mut raw)?;
+
+    let decoded = decode_attachment(&raw, encoding)?;
+    let safe = sanitize_filename(suggested_filename);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let target = dir.join(format!("{ts}-{safe}"));
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&target)?;
+    std::io::Write::write_all(&mut file, &decoded)?;
+    Ok(target)
+}
+
 pub(crate) fn copy_to_clipboard(hit: &Hit) {
     let text = match &hit.action {
         Action::OpenFile { path } | Action::ShowInFileManager { path } => {
