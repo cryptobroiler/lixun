@@ -9,6 +9,12 @@ pub struct AppsSource {
     pub search_dirs: Vec<PathBuf>,
 }
 
+impl Default for AppsSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppsSource {
     pub fn new() -> Self {
         let mut dirs = Vec::new();

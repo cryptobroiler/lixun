@@ -58,7 +58,7 @@ async fn send_request(req: Request) -> Result<Response> {
     stream.read_exact(&mut header).await?;
     let resp_len = u32::from_be_bytes(header) as usize;
     if resp_len < 2 {
-        return anyhow::bail!("response frame too short");
+        anyhow::bail!("response frame too short");
     }
     let mut version_buf = [0u8; 2];
     stream.read_exact(&mut version_buf).await?;

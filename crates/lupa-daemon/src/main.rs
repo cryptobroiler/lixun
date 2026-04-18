@@ -48,6 +48,7 @@ fn try_single_instance() -> Result<std::fs::File> {
     }
     let file = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(true)
         .write(true)
         .open(&path)?;
 
@@ -195,10 +196,9 @@ async fn main() -> Result<()> {
         signal_hook::consts::SIGINT,
     ])?;
     tokio::spawn(async move {
-        while let Some(sig) = signals.next().await {
+        if let Some(sig) = signals.next().await {
             tracing::info!("Received signal {}, shutting down...", sig);
             let _ = shutdown_tx_signal.send(()).await;
-            break;
         }
     });
 
@@ -382,7 +382,7 @@ async fn handle_client(
     stream.read_exact(&mut header).await?;
     let len = u32::from_be_bytes(header) as usize;
     if len < 2 {
-        return anyhow::bail!("frame too short for version");
+        anyhow::bail!("frame too short for version");
     }
     let mut version_buf = [0u8; 2];
     stream.read_exact(&mut version_buf).await?;

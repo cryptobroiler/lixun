@@ -80,11 +80,11 @@ pub async fn start(
                     for path in &event.paths {
                         if path.is_file() {
                             let path_str = path.to_string_lossy();
-                            if !should_exclude(&path_str, &exclude) {
-                                if let Ok(doc) = index_file(path, max_file_size_mb) {
-                                    idx.upsert(&doc, &mut writer)?;
-                                    changes += 1;
-                                }
+                            if !should_exclude(&path_str, &exclude)
+                                && let Ok(doc) = index_file(path, max_file_size_mb)
+                            {
+                                idx.upsert(&doc, &mut writer)?;
+                                changes += 1;
                             }
                         }
                     }

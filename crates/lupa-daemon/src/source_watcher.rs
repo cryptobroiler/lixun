@@ -27,10 +27,10 @@ pub async fn start(
     )?;
 
     for dir in &apps_source.search_dirs {
-        if dir.exists() {
-            if let Err(e) = watcher.watch(dir, RecursiveMode::NonRecursive) {
-                tracing::warn!("Failed to watch app dir {:?}: {}", dir, e);
-            }
+        if dir.exists()
+            && let Err(e) = watcher.watch(dir, RecursiveMode::NonRecursive)
+        {
+            tracing::warn!("Failed to watch app dir {:?}: {}", dir, e);
         }
     }
 
@@ -38,10 +38,10 @@ pub async fn start(
         let mail_path = att_source.profile_path.join("Mail");
         let imap_path = att_source.profile_path.join("ImapMail");
         for base in [&mail_path, &imap_path] {
-            if base.exists() {
-                if let Err(e) = watcher.watch(base, RecursiveMode::Recursive) {
-                    tracing::warn!("Failed to watch mail dir {:?}: {}", base, e);
-                }
+            if base.exists()
+                && let Err(e) = watcher.watch(base, RecursiveMode::Recursive)
+            {
+                tracing::warn!("Failed to watch mail dir {:?}: {}", base, e);
             }
         }
     }
@@ -86,7 +86,7 @@ pub async fn start(
             }
         }
 
-        if attachments_source.is_some() {
+        if let Some(attachments_source) = attachments_source.as_ref() {
             let has_mbox_events = events.iter().any(|e| {
                 e.paths.iter().any(|p| {
                     p.is_file()
@@ -103,9 +103,7 @@ pub async fn start(
                     .unwrap_or(true);
 
                 if cooldown_expired {
-                    if let Err(e) =
-                        reindex_attachments(&attachments_source.as_ref().unwrap(), &index).await
-                    {
+                    if let Err(e) = reindex_attachments(attachments_source, &index).await {
                         tracing::error!("Attachments reindex error: {}", e);
                     }
                     last_attachments_reindex = Some(Instant::now());

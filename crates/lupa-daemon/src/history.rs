@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ClickHistory {
@@ -11,7 +11,7 @@ pub struct ClickHistory {
 }
 
 impl ClickHistory {
-    pub fn load(state_dir: &PathBuf) -> Result<Self> {
+    pub fn load(state_dir: &Path) -> Result<Self> {
         let path = state_dir.join("history.json");
         if path.exists() {
             let content = std::fs::read_to_string(&path)?;
@@ -22,7 +22,7 @@ impl ClickHistory {
         }
     }
 
-    pub fn save(&self, state_dir: &PathBuf) -> Result<()> {
+    pub fn save(&self, state_dir: &Path) -> Result<()> {
         std::fs::create_dir_all(state_dir)?;
         let path = state_dir.join("history.json");
         let content = serde_json::to_string_pretty(self)?;

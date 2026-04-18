@@ -144,14 +144,14 @@ pub fn extract_path(path: &Path) -> Result<String> {
         | "java" | "go" | "sh" | "css" | "scss" | "sql" | "rb" => extract_text_file(path),
         _ => {
             // Magic sniff for extension-less text files
-            if ext.is_empty() {
-                if let Ok(mut f) = std::fs::File::open(path) {
-                    let mut buf = [0u8; 8192];
-                    let n = std::io::Read::read(&mut f, &mut buf).unwrap_or(0);
-                    let sniff = &buf[..n];
-                    if n > 0 && !sniff.contains(&0) && std::str::from_utf8(sniff).is_ok() {
-                        return extract_text_file(path);
-                    }
+            if ext.is_empty()
+                && let Ok(mut f) = std::fs::File::open(path)
+            {
+                let mut buf = [0u8; 8192];
+                let n = std::io::Read::read(&mut f, &mut buf).unwrap_or(0);
+                let sniff = &buf[..n];
+                if n > 0 && !sniff.contains(&0) && std::str::from_utf8(sniff).is_ok() {
+                    return extract_text_file(path);
                 }
             }
             Ok(String::new())
@@ -218,12 +218,13 @@ impl Extractor for OoxmlExtractor {
         if text.is_empty() {
             let indices: Vec<_> = (0..archive.len()).collect();
             for i in indices {
-                if let Ok(mut file) = archive.by_index(i) {
-                    if file.name().starts_with("xl/worksheets/") && file.name().ends_with(".xml") {
-                        let mut content = String::new();
-                        std::io::Read::read_to_string(&mut file, &mut content)?;
-                        text.push_str(&strip_xml_tags(&content));
-                    }
+                if let Ok(mut file) = archive.by_index(i)
+                    && file.name().starts_with("xl/worksheets/")
+                    && file.name().ends_with(".xml")
+                {
+                    let mut content = String::new();
+                    std::io::Read::read_to_string(&mut file, &mut content)?;
+                    text.push_str(&strip_xml_tags(&content));
                 }
             }
         }
@@ -232,12 +233,13 @@ impl Extractor for OoxmlExtractor {
         if text.is_empty() {
             let indices: Vec<_> = (0..archive.len()).collect();
             for i in indices {
-                if let Ok(mut file) = archive.by_index(i) {
-                    if file.name().starts_with("ppt/slides/") && file.name().ends_with(".xml") {
-                        let mut content = String::new();
-                        std::io::Read::read_to_string(&mut file, &mut content)?;
-                        text.push_str(&strip_xml_tags(&content));
-                    }
+                if let Ok(mut file) = archive.by_index(i)
+                    && file.name().starts_with("ppt/slides/")
+                    && file.name().ends_with(".xml")
+                {
+                    let mut content = String::new();
+                    std::io::Read::read_to_string(&mut file, &mut content)?;
+                    text.push_str(&strip_xml_tags(&content));
                 }
             }
         }

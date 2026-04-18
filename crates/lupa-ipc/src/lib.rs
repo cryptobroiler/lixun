@@ -135,23 +135,21 @@ pub fn socket_path() -> PathBuf {
 }
 
 fn get_uid() -> u32 {
-    if let Ok(uid) = std::env::var("UID") {
-        if let Ok(uid) = uid.parse::<u32>() {
-            return uid;
-        }
+    if let Ok(uid) = std::env::var("UID")
+        && let Ok(uid) = uid.parse::<u32>()
+    {
+        return uid;
     }
     if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
         for line in status.lines() {
-            if let Some(rest) = line.strip_prefix("Uid:") {
-                if let Ok(uid) = rest
-                    .trim()
+            if let Some(rest) = line.strip_prefix("Uid:")
+                && let Ok(uid) = rest
                     .split_whitespace()
                     .next()
                     .unwrap_or("0")
                     .parse::<u32>()
-                {
-                    return uid;
-                }
+            {
+                return uid;
             }
         }
     }

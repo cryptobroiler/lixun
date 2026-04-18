@@ -33,6 +33,32 @@ pub struct Config {
     pub state_dir: PathBuf,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home".into());
+        Self {
+            roots: vec![PathBuf::from(&home)],
+            exclude: vec![
+                ".cache".into(),
+                ".local/share/Trash".into(),
+                "node_modules".into(),
+                "target".into(),
+                ".git".into(),
+                ".venv".into(),
+                "__pycache__".into(),
+                ".thunderbird".into(),
+            ],
+            max_file_size_mb: 50,
+            extractor_timeout_secs: 15,
+            ranking_apps: 1.3,
+            ranking_files: 1.2,
+            ranking_mail: 1.0,
+            ranking_attachments: 0.9,
+            state_dir: state_dir(),
+        }
+    }
+}
+
 impl Config {
     pub fn load() -> Result<Self> {
         let config_path = config_dir().join("lupa/config.toml");
@@ -71,30 +97,6 @@ impl Config {
         }
 
         Ok(cfg)
-    }
-
-    pub fn default() -> Self {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/home".into());
-        Self {
-            roots: vec![PathBuf::from(&home)],
-            exclude: vec![
-                ".cache".into(),
-                ".local/share/Trash".into(),
-                "node_modules".into(),
-                "target".into(),
-                ".git".into(),
-                ".venv".into(),
-                "__pycache__".into(),
-                ".thunderbird".into(),
-            ],
-            max_file_size_mb: 50,
-            extractor_timeout_secs: 15,
-            ranking_apps: 1.3,
-            ranking_files: 1.2,
-            ranking_mail: 1.0,
-            ranking_attachments: 0.9,
-            state_dir: state_dir(),
-        }
     }
 
     pub fn build_fs_source(&self) -> Result<lupa_sources::fs::FsSource> {

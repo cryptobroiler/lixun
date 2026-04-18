@@ -184,16 +184,16 @@ pub fn parse_mbox_parts_from_bytes(bytes: &[u8], path: &Path) -> Result<Vec<Mbox
         });
         let subject = parsed.headers.get_first_value("Subject");
         let mut part_index = 0;
-        walk_parts(
-            &parsed,
-            message_bytes,
-            msg_offset + message_start_in_msg,
-            path,
-            &message_id,
-            &subject,
-            &mut part_index,
-            &mut results,
-        );
+        let mut ctx = WalkContext {
+            msg_slice: message_bytes,
+            msg_offset: msg_offset + message_start_in_msg,
+            mbox_path: path,
+            message_id: &message_id,
+            subject: &subject,
+            part_index: &mut part_index,
+            results: &mut results,
+        };
+        walk_parts(&parsed, &mut ctx);
     }
 
     Ok(results)
@@ -214,51 +214,50 @@ fn strip_mbox_envelope(msg_slice: &[u8]) -> Option<(usize, &[u8])> {
     Some((0, msg_slice))
 }
 
-fn walk_parts(
-    part: &mailparse::ParsedMail<'_>,
-    msg_slice: &[u8],
+struct WalkContext<'a> {
+    msg_slice: &'a [u8],
     msg_offset: usize,
-    mbox_path: &Path,
-    message_id: &Option<String>,
-    subject: &Option<String>,
-    part_index: &mut usize,
-    results: &mut Vec<MboxPart>,
-) {
+    mbox_path: &'a Path,
+    message_id: &'a Option<String>,
+    subject: &'a Option<String>,
+    part_index: &'a mut usize,
+    results: &'a mut Vec<MboxPart>,
+}
+
+fn walk_parts(part: &mailparse::ParsedMail<'_>, ctx: &mut WalkContext<'_>) {
     if part.subparts.is_empty() && is_attachment(part) {
         let raw = part.raw_bytes;
-        let part_start_in_msg = raw.as_ptr() as usize - msg_slice.as_ptr() as usize;
+        let part_start_in_msg = raw.as_ptr() as usize - ctx.msg_slice.as_ptr() as usize;
         if let Some(headers_end) = find_headers_end(raw) {
             let filename =
-                extract_filename(part).unwrap_or_else(|| format!("attachment-{}", *part_index));
+                extract_filename(part).unwrap_or_else(|| format!("attachment-{}", *ctx.part_index));
             let encoding = part
                 .headers
                 .get_first_value("Content-Transfer-Encoding")
                 .map(|value| PartEncoding::from_header(&value))
                 .unwrap_or(PartEncoding::SevenBit);
-            let body_offset = msg_offset + part_start_in_msg + headers_end;
+            let body_offset = ctx.msg_offset + part_start_in_msg + headers_end;
             let body_length = raw.len().saturating_sub(headers_end);
 
-            results.push(MboxPart {
-                mbox_path: mbox_path.to_path_buf(),
-                message_id: message_id.clone(),
-                part_index: *part_index,
-                msg_byte_offset: msg_offset as u64,
-                msg_length: msg_slice.len() as u64,
+            ctx.results.push(MboxPart {
+                mbox_path: ctx.mbox_path.to_path_buf(),
+                message_id: ctx.message_id.clone(),
+                part_index: *ctx.part_index,
+                msg_byte_offset: ctx.msg_offset as u64,
+                msg_length: ctx.msg_slice.len() as u64,
                 part_body_byte_offset: body_offset as u64,
                 part_body_length: body_length as u64,
                 filename: sanitize_filename(&filename),
                 mime: part.ctype.mimetype.clone(),
                 encoding,
-                subject: subject.clone(),
+                subject: ctx.subject.clone(),
             });
-            *part_index += 1;
+            *ctx.part_index += 1;
         }
     }
 
     for subpart in &part.subparts {
-        walk_parts(
-            subpart, msg_slice, msg_offset, mbox_path, message_id, subject, part_index, results,
-        );
+        walk_parts(subpart, ctx);
     }
 }
 
@@ -274,19 +273,19 @@ fn is_attachment(part: &mailparse::ParsedMail<'_>) -> bool {
 }
 
 fn extract_filename(part: &mailparse::ParsedMail<'_>) -> Option<String> {
-    if let Some(disposition) = part.headers.get_first_value("Content-Disposition") {
-        if let Some(start) = disposition.to_ascii_lowercase().find("filename=") {
-            let rest = &disposition[start + 9..];
-            let filename = rest
-                .split(';')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .trim_matches('"')
-                .to_string();
-            if !filename.is_empty() {
-                return Some(filename);
-            }
+    if let Some(disposition) = part.headers.get_first_value("Content-Disposition")
+        && let Some(start) = disposition.to_ascii_lowercase().find("filename=")
+    {
+        let rest = &disposition[start + 9..];
+        let filename = rest
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_matches('"')
+            .to_string();
+        if !filename.is_empty() {
+            return Some(filename);
         }
     }
 

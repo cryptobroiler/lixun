@@ -66,12 +66,10 @@ impl GlodaSource {
         if !tb_path.exists() {
             return None;
         }
-        for entry in std::fs::read_dir(&tb_path).ok()? {
-            if let Ok(entry) = entry {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.contains(".default") {
-                    return Some(entry.path());
-                }
+        for entry in std::fs::read_dir(&tb_path).ok()?.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.contains(".default") {
+                return Some(entry.path());
             }
         }
         None

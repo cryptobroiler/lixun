@@ -584,15 +584,14 @@ fn build_window(app: &gtk::Application) -> Result<()> {
     add_css_class(&window, "lupa-window");
 
     // Multi-monitor: place on monitor under pointer
-    if let Some(display) = gtk::gdk::Display::default() {
-        if let Some(seat) = display.default_seat() {
-            if let Some(pointer) = seat.pointer() {
-                let (surface, _, _) = pointer.surface_at_position();
-                if let Some(surface) = surface {
-                    let monitor = display.monitor_at_surface(&surface);
-                    window.set_monitor(monitor.as_ref());
-                }
-            }
+    if let Some(display) = gtk::gdk::Display::default()
+        && let Some(seat) = display.default_seat()
+        && let Some(pointer) = seat.pointer()
+    {
+        let (surface, _, _) = pointer.surface_at_position();
+        if let Some(surface) = surface {
+            let monitor = display.monitor_at_surface(&surface);
+            window.set_monitor(monitor.as_ref());
         }
     }
 
@@ -690,7 +689,7 @@ fn build_window(app: &gtk::Application) -> Result<()> {
     // Keyboard nav
     let key_controller = gtk::EventControllerKey::new();
     key_controller.connect_key_pressed(
-        clone!(@strong selection, @strong model, @strong window => move |_, key, _keycode, state| {
+        clone!(#[strong] selection, #[strong] model, #[strong] window, move |_, key, _keycode, state| {
             match key {
                 gtk::gdk::Key::Up => {
                     let current = selection.selected();
@@ -713,40 +712,38 @@ fn build_window(app: &gtk::Application) -> Result<()> {
                 }
                 gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter => {
                     let idx = selection.selected();
-                    if let Some(item) = model.item(idx) {
-                        if let Some(str_obj) = item.downcast_ref::<gtk::StringObject>() {
-                            let doc_id = str_obj.string().to_string();
-                            with_cached_hits(|hits| {
-                                if let Some(hit) = hits.iter().find(|h| h.id.0 == doc_id) {
-                                    send_record_click(&hit.id.0);
-                                    if state.contains(gtk::gdk::ModifierType::SHIFT_MASK) {
-                                        if let Err(e) = execute_secondary_action(hit) {
-                                            tracing::error!("Secondary action failed: {}", e);
-                                        }
-                                    } else {
-                                        if let Err(e) = execute_action(hit) {
-                                            tracing::error!("Failed to execute action: {}", e);
-                                        }
+                    if let Some(item) = model.item(idx)
+                        && let Some(str_obj) = item.downcast_ref::<gtk::StringObject>()
+                    {
+                        let doc_id = str_obj.string().to_string();
+                        with_cached_hits(|hits| {
+                            if let Some(hit) = hits.iter().find(|h| h.id.0 == doc_id) {
+                                send_record_click(&hit.id.0);
+                                if state.contains(gtk::gdk::ModifierType::SHIFT_MASK) {
+                                    if let Err(e) = execute_secondary_action(hit) {
+                                        tracing::error!("Secondary action failed: {}", e);
                                     }
-                                    window.hide();
+                                } else if let Err(e) = execute_action(hit) {
+                                    tracing::error!("Failed to execute action: {}", e);
                                 }
-                            });
-                        }
+                                window.hide();
+                            }
+                        });
                     }
                     glib::signal::Propagation::Stop
                 }
                 gtk::gdk::Key::c | gtk::gdk::Key::C => {
                     if state.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
                         let idx = selection.selected();
-                        if let Some(item) = model.item(idx) {
-                            if let Some(str_obj) = item.downcast_ref::<gtk::StringObject>() {
-                                let doc_id = str_obj.string().to_string();
-                                with_cached_hits(|hits| {
-                                    if let Some(hit) = hits.iter().find(|h| h.id.0 == doc_id) {
-                                        copy_to_clipboard(hit);
-                                    }
-                                });
-                            }
+                        if let Some(item) = model.item(idx)
+                            && let Some(str_obj) = item.downcast_ref::<gtk::StringObject>()
+                        {
+                            let doc_id = str_obj.string().to_string();
+                            with_cached_hits(|hits| {
+                                if let Some(hit) = hits.iter().find(|h| h.id.0 == doc_id) {
+                                    copy_to_clipboard(hit);
+                                }
+                            });
                         }
                         glib::signal::Propagation::Stop
                     } else {
@@ -760,20 +757,20 @@ fn build_window(app: &gtk::Application) -> Result<()> {
     list_view.add_controller(key_controller);
 
     // Enter on entry (no modifier — primary action)
-    entry.connect_activate(clone!(@strong selection, @strong model => move |_| {
+    entry.connect_activate(clone!(#[strong] selection, #[strong] model, move |_| {
         let idx = selection.selected();
-        if let Some(item) = model.item(idx) {
-            if let Some(str_obj) = item.downcast_ref::<gtk::StringObject>() {
-                let doc_id = str_obj.string().to_string();
-                with_cached_hits(|hits| {
-                    if let Some(hit) = hits.iter().find(|h| h.id.0 == doc_id) {
-                        send_record_click(&hit.id.0);
-                        if let Err(e) = execute_action(hit) {
-                            tracing::error!("Failed to execute action: {}", e);
-                        }
+        if let Some(item) = model.item(idx)
+            && let Some(str_obj) = item.downcast_ref::<gtk::StringObject>()
+        {
+            let doc_id = str_obj.string().to_string();
+            with_cached_hits(|hits| {
+                if let Some(hit) = hits.iter().find(|h| h.id.0 == doc_id) {
+                    send_record_click(&hit.id.0);
+                    if let Err(e) = execute_action(hit) {
+                        tracing::error!("Failed to execute action: {}", e);
                     }
-                });
-            }
+                }
+            });
         }
     }));
 

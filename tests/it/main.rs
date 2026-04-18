@@ -1,5 +1,4 @@
 use std::process::Command;
-use std::time::Duration;
 
 #[test]
 fn test_lupa_help() {
