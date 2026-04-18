@@ -1,8 +1,8 @@
 use anyhow::Result;
 use lupa_index::LupaIndex;
+use lupa_sources::Source;
 use lupa_sources::apps::AppsSource;
 use lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource;
-use lupa_sources::Source;
 use notify::{Config, Event, RecursiveMode, Watcher as NotifyWatcher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -66,9 +66,9 @@ pub async fn start(
         }
 
         let has_app_events = events.iter().any(|e| {
-            e.paths.iter().any(|p| {
-                p.extension().map(|e| e == "desktop").unwrap_or(false)
-            })
+            e.paths
+                .iter()
+                .any(|p| p.extension().map(|e| e == "desktop").unwrap_or(false))
         });
 
         if has_app_events {
@@ -89,7 +89,11 @@ pub async fn start(
         if attachments_source.is_some() {
             let has_mbox_events = events.iter().any(|e| {
                 e.paths.iter().any(|p| {
-                    p.is_file() && !p.file_name().map(|n| n.to_string_lossy().ends_with(".msf")).unwrap_or(true)
+                    p.is_file()
+                        && !p
+                            .file_name()
+                            .map(|n| n.to_string_lossy().ends_with(".msf"))
+                            .unwrap_or(true)
                 })
             });
 
@@ -99,7 +103,9 @@ pub async fn start(
                     .unwrap_or(true);
 
                 if cooldown_expired {
-                    if let Err(e) = reindex_attachments(&attachments_source.as_ref().unwrap(), &index).await {
+                    if let Err(e) =
+                        reindex_attachments(&attachments_source.as_ref().unwrap(), &index).await
+                    {
                         tracing::error!("Attachments reindex error: {}", e);
                     }
                     last_attachments_reindex = Some(Instant::now());

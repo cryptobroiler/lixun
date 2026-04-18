@@ -196,8 +196,8 @@ impl crate::Source for GlodaSource {
 mod tests {
     use super::*;
     use rusqlite::Connection;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn setup_schema(conn: &Connection) {
         conn.execute_batch(
@@ -320,11 +320,7 @@ mod tests {
             |e: &i32| *e == 5,
             move || {
                 let n = c.fetch_add(1, Ordering::SeqCst);
-                if n < 2 {
-                    Err(5)
-                } else {
-                    Ok(42)
-                }
+                if n < 2 { Err(5) } else { Ok(42) }
             },
         );
         assert_eq!(result.unwrap(), 42);

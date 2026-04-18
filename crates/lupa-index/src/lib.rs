@@ -3,12 +3,12 @@
 use anyhow::Result;
 use std::path::Path;
 use tantivy::{
+    Index, IndexWriter, TantivyDocument, Term,
     collector::TopDocs,
     directory::MmapDirectory,
     doc,
     query::{BooleanQuery, FuzzyTermQuery, Occur, Query as TQuery},
-    schema::{Schema, Value, STORED, TEXT},
-    Index, IndexWriter, TantivyDocument, Term,
+    schema::{STORED, Schema, TEXT, Value},
 };
 
 use lupa_core::{Category, Document, Hit, Query};

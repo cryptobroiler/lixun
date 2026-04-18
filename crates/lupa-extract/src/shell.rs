@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::Duration;

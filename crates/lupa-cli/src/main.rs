@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use bytes::{BufMut, BytesMut};
 use clap::{Parser, Subcommand};
-use lupa_ipc::{Request, Response, PROTOCOL_VERSION};
+use lupa_ipc::{PROTOCOL_VERSION, Request, Response};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -41,12 +41,10 @@ enum Commands {
 async fn send_request(req: Request) -> Result<Response> {
     let socket_path = lupa_ipc::socket_path();
 
-    let mut stream = UnixStream::connect(&socket_path)
-        .await
-        .context(format!(
-            "lupad not running; start with: systemctl --user start lupad\n(socket: {:?})",
-            socket_path
-        ))?;
+    let mut stream = UnixStream::connect(&socket_path).await.context(format!(
+        "lupad not running; start with: systemctl --user start lupad\n(socket: {:?})",
+        socket_path
+    ))?;
 
     let json = serde_json::to_vec(&req)?;
     let total_len = (2 + json.len()) as u32;
@@ -110,10 +108,17 @@ fn handle_response(resp: Response) {
         Response::Ok => {}
         Response::Hits(hits) => {
             for hit in hits {
-                println!("{:.2} | {:?} | {} | {}", hit.score, hit.category, hit.title, hit.subtitle);
+                println!(
+                    "{:.2} | {:?} | {} | {}",
+                    hit.score, hit.category, hit.title, hit.subtitle
+                );
             }
         }
-        Response::Status { indexed_docs, last_reindex, errors } => {
+        Response::Status {
+            indexed_docs,
+            last_reindex,
+            errors,
+        } => {
             println!("Indexed documents: {}", indexed_docs);
             println!("Last reindex: {:?}", last_reindex);
             println!("Errors: {}", errors);

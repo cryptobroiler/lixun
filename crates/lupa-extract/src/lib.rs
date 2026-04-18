@@ -110,7 +110,9 @@ pub fn extract_bytes(bytes: &[u8], ext_hint: Option<&str>) -> Result<String> {
         return extractor.extract(bytes);
     }
 
-    if !bytes.contains(&0) && let Ok(text) = std::str::from_utf8(bytes) {
+    if !bytes.contains(&0)
+        && let Ok(text) = std::str::from_utf8(bytes)
+    {
         return Ok(text.to_string());
     }
 

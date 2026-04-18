@@ -5,14 +5,14 @@
 
 use std::cell::RefCell;
 use std::io::{Read, Write};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Instant;
 
 use glib::clone;
 use gtk::prelude::*;
 use gtk4_layer_shell::LayerShell;
 use lupa_core::{Action, Category, Hit};
-use lupa_ipc::{socket_path, Request, Response, PROTOCOL_VERSION};
+use lupa_ipc::{PROTOCOL_VERSION, Request, Response, socket_path};
 
 use anyhow::Result;
 

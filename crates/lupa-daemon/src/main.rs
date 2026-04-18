@@ -3,13 +3,13 @@
 use anyhow::Result;
 use bytes::{BufMut, BytesMut};
 use chrono::Utc;
+use futures::StreamExt;
 use lupa_index::LupaIndex;
-use lupa_ipc::{Request, Response, socket_path, PROTOCOL_VERSION};
+use lupa_ipc::{PROTOCOL_VERSION, Request, Response, socket_path};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
-use futures::StreamExt;
 
 mod cursors;
 mod gloda_poll;
@@ -35,8 +35,9 @@ struct GuiState {
 }
 
 fn pid_path() -> std::path::PathBuf {
-    let runtime = dirs::runtime_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() })));
+    let runtime = dirs::runtime_dir().unwrap_or_else(|| {
+        std::path::PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() }))
+    });
     runtime.join("lupa.pid")
 }
 
@@ -52,7 +53,10 @@ fn try_single_instance() -> Result<std::fs::File> {
 
     let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     if ret != 0 {
-        anyhow::bail!("another instance of lupad is already running (pid file: {:?})", path);
+        anyhow::bail!(
+            "another instance of lupad is already running (pid file: {:?})",
+            path
+        );
     }
 
     use std::io::Write;
@@ -65,8 +69,7 @@ fn try_single_instance() -> Result<std::fs::File> {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("lupa=info".parse()?),
+            tracing_subscriber::EnvFilter::from_default_env().add_directive("lupa=info".parse()?),
         )
         .init();
 
@@ -77,11 +80,9 @@ async fn main() -> Result<()> {
     let config = config::Config::load()?;
     tracing::info!("Config loaded: roots={:?}", config.roots);
 
-    lupa_extract::init_capabilities(
-        lupa_extract::ExtractorCapabilities::probe(
-            std::time::Duration::from_secs(config.extractor_timeout_secs),
-        ),
-    );
+    lupa_extract::init_capabilities(lupa_extract::ExtractorCapabilities::probe(
+        std::time::Duration::from_secs(config.extractor_timeout_secs),
+    ));
 
     let index_path = config.state_dir.join("index");
     let index = lupa_index::LupaIndex::create_or_open(index_path.to_str().unwrap())?;
@@ -121,7 +122,14 @@ async fn main() -> Result<()> {
     let watcher_index = search.index();
 
     tokio::spawn(async move {
-        if let Err(e) = watcher::start(watcher_roots, watcher_exclude, watcher_max_size, watcher_index).await {
+        if let Err(e) = watcher::start(
+            watcher_roots,
+            watcher_exclude,
+            watcher_max_size,
+            watcher_index,
+        )
+        .await
+        {
             tracing::error!("Watcher error: {}", e);
         }
     });
@@ -380,7 +388,10 @@ async fn handle_client(
     stream.read_exact(&mut version_buf).await?;
     let version = u16::from_be_bytes(version_buf);
     if version != PROTOCOL_VERSION {
-        let resp = Response::Error(format!("version mismatch: expected {}, got {}", PROTOCOL_VERSION, version));
+        let resp = Response::Error(format!(
+            "version mismatch: expected {}, got {}",
+            PROTOCOL_VERSION, version
+        ));
         let json = serde_json::to_vec(&resp)?;
         let out_len = (json.len() as u32).to_be_bytes();
         stream.write_all(&out_len).await?;
@@ -396,7 +407,9 @@ async fn handle_client(
         Request::Toggle => {
             let mut state = gui_state.write().await;
             state.visible = !state.visible;
-            Response::Visibility { visible: state.visible }
+            Response::Visibility {
+                visible: state.visible,
+            }
         }
         Request::Show => {
             let mut state = gui_state.write().await;
@@ -408,19 +421,21 @@ async fn handle_client(
             state.visible = false;
             Response::Visibility { visible: false }
         }
-        Request::Search { q, limit } => {
-            match search.search(&q, limit).await {
-                Ok(mut hits) => {
-                    let history = history.read().await;
-                    for hit in &mut hits {
-                        hit.score += history.bonus(&hit.id.0);
-                    }
-                    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-                    Response::Hits(hits)
+        Request::Search { q, limit } => match search.search(&q, limit).await {
+            Ok(mut hits) => {
+                let history = history.read().await;
+                for hit in &mut hits {
+                    hit.score += history.bonus(&hit.id.0);
                 }
-                Err(e) => Response::Error(e.to_string()),
+                hits.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                Response::Hits(hits)
             }
-        }
+            Err(e) => Response::Error(e.to_string()),
+        },
         Request::Reindex { paths } => {
             let result = do_reindex(&search, &stats, &config, paths).await;
             match result {

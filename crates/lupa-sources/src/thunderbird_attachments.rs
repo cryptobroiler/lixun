@@ -146,9 +146,10 @@ mod tests {
         let source = ThunderbirdAttachmentsSource::new(profile.to_path_buf(), 100 * 1024 * 1024);
         let docs = source.index_all().unwrap();
 
-        assert!(docs.iter().any(|doc| doc
-            .body
-            .as_deref()
-            .is_some_and(|body| body.contains("UNIQUE_TEST_MARKER"))));
+        assert!(docs.iter().any(|doc| {
+            doc.body
+                .as_deref()
+                .is_some_and(|body| body.contains("UNIQUE_TEST_MARKER"))
+        }));
     }
 }

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use lupa_index::LupaIndex;
-use lupa_sources::gloda::GlodaSource;
 use lupa_sources::Source;
+use lupa_sources::gloda::GlodaSource;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,7 +43,8 @@ pub async fn start(
             continue;
         }
 
-        let max_key = docs.iter()
+        let max_key = docs
+            .iter()
             .filter_map(|d| d.id.0.strip_prefix("mail:"))
             .filter_map(|s: &str| s.parse::<u64>().ok())
             .max()
@@ -69,6 +70,10 @@ pub async fn start(
             tracing::error!("Failed to save Gloda cursor: {}", e);
         }
 
-        tracing::info!("Gloda poll: indexed {} new messages (cursor: {})", docs.len(), max_key);
+        tracing::info!(
+            "Gloda poll: indexed {} new messages (cursor: {})",
+            docs.len(),
+            max_key
+        );
     }
 }

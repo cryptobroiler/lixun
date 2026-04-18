@@ -5,7 +5,7 @@ use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watche
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 
 /// Debounced file watcher that keeps the index in sync.
 pub async fn start(
@@ -65,14 +65,18 @@ pub async fn start(
                         changes += 1;
                     }
                 }
-                EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::From)) => {
+                EventKind::Modify(notify::event::ModifyKind::Name(
+                    notify::event::RenameMode::From,
+                )) => {
                     for path in &event.paths {
                         let id = format!("fs:{}", path.to_string_lossy());
                         idx.delete_by_id(&id, &mut writer)?;
                         changes += 1;
                     }
                 }
-                EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::To)) => {
+                EventKind::Modify(notify::event::ModifyKind::Name(
+                    notify::event::RenameMode::To,
+                )) => {
                     for path in &event.paths {
                         if path.is_file() {
                             let path_str = path.to_string_lossy();
@@ -121,13 +125,19 @@ fn should_exclude(path: &str, exclude: &[String]) -> bool {
 
 pub fn index_file(path: &std::path::Path, max_file_size_mb: u64) -> Result<Document> {
     let path_str = path.to_string_lossy().to_string();
-    let filename = path.file_name()
+    let filename = path
+        .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
 
     let metadata = std::fs::metadata(path)?;
-    let mtime = metadata.modified()
-        .map(|t| t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0))
+    let mtime = metadata
+        .modified()
+        .map(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0)
+        })
         .unwrap_or(0);
     let size = metadata.len();
 
@@ -151,7 +161,9 @@ pub fn index_file(path: &std::path::Path, max_file_size_mb: u64) -> Result<Docum
         path: path_str,
         mtime,
         size,
-        action: Action::OpenFile { path: path.to_path_buf() },
+        action: Action::OpenFile {
+            path: path.to_path_buf(),
+        },
         extract_fail,
     })
 }
