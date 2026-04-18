@@ -1,6 +1,7 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use std::io::Read;
 use std::process::{Command, Stdio};
+use std::thread;
 use std::time::Duration;
 use wait_timeout::ChildExt;
 
@@ -34,48 +35,60 @@ impl CommandRunner for SystemRunner {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        if self.timeout.is_zero() {
-            let output = child.wait_with_output()?;
-            return if output.status.success() {
-                Ok(String::from_utf8_lossy(&output.stdout).to_string())
-            } else {
-                Err(anyhow!(
-                    "{} failed: {}",
-                    cmd,
-                    String::from_utf8_lossy(&output.stderr)
-                ))
-            };
-        }
+        // Invariant: both pipes were just configured as Stdio::piped() above,
+        // so the Options MUST be Some. Drain concurrently in worker threads to
+        // prevent the child from blocking on a full pipe buffer (~64KB on Linux)
+        // while we wait for it to exit.
+        let mut stdout_pipe = child.stdout.take().expect("piped stdout");
+        let mut stderr_pipe = child.stderr.take().expect("piped stderr");
 
-        match child.wait_timeout(self.timeout)? {
-            Some(status) => {
-                let mut stdout = String::new();
-                let mut stderr = String::new();
-                if let Some(mut out) = child.stdout.take() {
-                    let mut buf = Vec::new();
-                    out.read_to_end(&mut buf).ok();
-                    stdout = String::from_utf8_lossy(&buf).to_string();
-                }
-                if let Some(mut err) = child.stderr.take() {
-                    let mut buf = Vec::new();
-                    err.read_to_end(&mut buf).ok();
-                    stderr = String::from_utf8_lossy(&buf).to_string();
-                }
-                if status.success() {
-                    Ok(stdout)
-                } else {
-                    Err(anyhow!("{} failed: {}", cmd, stderr))
+        let stdout_handle = thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stdout_pipe.read_to_end(&mut buf);
+            buf
+        });
+        let stderr_handle = thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stderr_pipe.read_to_end(&mut buf);
+            buf
+        });
+
+        let status = if self.timeout.is_zero() {
+            child.wait()?
+        } else {
+            match child.wait_timeout(self.timeout)? {
+                Some(s) => s,
+                None => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    // Killing the child closes the pipes, so the worker threads
+                    // will return from read_to_end. Join them to avoid leaks.
+                    let _ = stdout_handle.join();
+                    let _ = stderr_handle.join();
+                    return Err(anyhow!(
+                        "extractor '{}' timed out after {}s",
+                        cmd,
+                        self.timeout.as_secs()
+                    ));
                 }
             }
-            None => {
-                let _ = child.kill();
-                let _ = child.wait();
-                Err(anyhow!(
-                    "extractor '{}' timed out after {}s",
-                    cmd,
-                    self.timeout.as_secs()
-                ))
-            }
+        };
+
+        let stdout_bytes = stdout_handle
+            .join()
+            .map_err(|_| anyhow!("stdout reader thread panicked"))?;
+        let stderr_bytes = stderr_handle
+            .join()
+            .map_err(|_| anyhow!("stderr reader thread panicked"))?;
+
+        if status.success() {
+            Ok(String::from_utf8_lossy(&stdout_bytes).to_string())
+        } else {
+            Err(anyhow!(
+                "{} failed: {}",
+                cmd,
+                String::from_utf8_lossy(&stderr_bytes)
+            ))
         }
     }
 }
@@ -153,5 +166,28 @@ mod tests {
         let runner = SystemRunner::new(0);
         let out = runner.run("sh", &["-c", "echo ok"], None).unwrap();
         assert!(out.contains("ok"));
+    }
+
+    #[test]
+    fn test_large_output_no_deadlock() {
+        // Without concurrent pipe drain this hangs: the child fills the stdout
+        // pipe buffer (~64KB on Linux) and blocks forever, our wait_timeout
+        // then kills a healthy process. ~512KB exceeds every reasonable pipe
+        // buffer.
+        let runner = SystemRunner::new(30);
+        let big = "a".repeat(100);
+        let cmd = format!("for i in $(seq 1 5000); do printf '%s\\n' '{}'; done", big);
+        let start = Instant::now();
+        let out = runner.run("sh", &["-c", &cmd], None).unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "took too long: {:?}",
+            start.elapsed()
+        );
+        assert!(
+            out.len() > 100_000,
+            "expected >100KB output, got {}",
+            out.len()
+        );
     }
 }
