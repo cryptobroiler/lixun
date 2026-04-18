@@ -63,6 +63,8 @@ pub enum Action {
     },
     /// Open the parent mail for an attachment.
     OpenParentMail { message_id: String },
+    /// Replace the current search query with this text (used for recent-query hits).
+    ReplaceQuery { q: String },
 }
 
 /// A search result.

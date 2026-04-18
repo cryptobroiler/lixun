@@ -246,6 +246,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         let id = glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
             *last_q.borrow_mut() = q.clone();
             status.show_loading();
+            crate::ipc::send_record_query(&q);
             let _ = ipc.request_tx.send((q, 30));
             *pending_self.borrow_mut() = None;
         });
@@ -259,7 +260,10 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         &entry,
         &selection,
         &filter_model,
+        &model,
         std::rc::Rc::clone(&chips_rc),
+        std::rc::Rc::clone(&status_bar),
+        ipc.clone(),
     );
 
     install_drag_handler(&window);

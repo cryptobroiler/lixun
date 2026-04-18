@@ -50,6 +50,25 @@ pub(crate) fn update_results(model: &gtk::StringList, hits: &[Hit]) {
     }
 }
 
+pub(crate) fn synthetic_history_hits(queries: &[String]) -> Vec<Hit> {
+    use lupa_core::{Action, DocId};
+    queries
+        .iter()
+        .enumerate()
+        .map(|(i, q)| Hit {
+            id: DocId(format!("history:{i}:{q}")),
+            category: Category::File,
+            title: q.clone(),
+            subtitle: "Recent search".to_string(),
+            icon_name: Some("document-open-recent".to_string()),
+            kind_label: Some("Recent".to_string()),
+            score: 0.0,
+            action: Action::ReplaceQuery { q: q.clone() },
+            extract_fail: false,
+        })
+        .collect()
+}
+
 fn build_menu_for(category: &Category) -> gio::Menu {
     let menu = gio::Menu::new();
     match category {

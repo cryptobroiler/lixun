@@ -7,10 +7,12 @@
 use glib::clone;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, LayerShell};
+use lupa_core::Action;
 
 use crate::actions::{copy_to_clipboard, execute_action, execute_secondary_action, quick_look};
-use crate::factory::with_cached_hits;
-use crate::ipc::send_record_click;
+use crate::factory::{synthetic_history_hits, update_results, with_cached_hits};
+use crate::ipc::{request_search_history, send_record_click, IpcClient};
+use crate::status::StatusBar;
 use crate::window::{save_window_position, CategoryChips, DEFAULT_TOP_MARGIN};
 
 fn selected_hit_in<F: FnOnce(&lupa_core::Hit)>(
@@ -73,13 +75,17 @@ fn jump_to_next_category(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn install_keyboard_handler(
     window: &gtk::ApplicationWindow,
     list_view: &gtk::ListView,
     entry: &gtk::Entry,
     selection: &gtk::SingleSelection,
     filter_model: &gtk::FilterListModel,
+    model: &gtk::StringList,
     chips: std::rc::Rc<CategoryChips>,
+    status_bar: std::rc::Rc<StatusBar>,
+    _ipc: IpcClient,
 ) {
     let key_controller = gtk::EventControllerKey::new();
     key_controller.connect_key_pressed(clone!(
@@ -125,7 +131,15 @@ pub(crate) fn install_keyboard_handler(
                     glib::signal::Propagation::Stop
                 }
                 gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter => {
+                    let mut should_hide = true;
                     selected_hit_in(&selection, &filter_model, |hit| {
+                        if let Action::ReplaceQuery { q } = &hit.action {
+                            entry.set_text(q);
+                            entry.set_position(-1);
+                            entry.grab_focus();
+                            should_hide = false;
+                            return;
+                        }
                         send_record_click(&hit.id.0);
                         let result = if shift || ctrl {
                             execute_secondary_action(hit)
@@ -136,7 +150,9 @@ pub(crate) fn install_keyboard_handler(
                             tracing::error!("Action failed: {}", e);
                         }
                     });
-                    window.hide();
+                    if should_hide {
+                        window.hide();
+                    }
                     glib::signal::Propagation::Stop
                 }
                 gtk::gdk::Key::c | gtk::gdk::Key::C if ctrl => {
@@ -186,11 +202,24 @@ pub(crate) fn install_keyboard_handler(
     let entry_key_controller = gtk::EventControllerKey::new();
     entry_key_controller.connect_key_pressed(clone!(
         #[strong] window,
+        #[strong] entry,
+        #[strong] model,
+        #[strong] status_bar,
         move |_, key, _keycode, state| {
             let alt = state.contains(gtk::gdk::ModifierType::ALT_MASK);
             match key {
                 gtk::gdk::Key::Escape => {
                     window.hide();
+                    glib::signal::Propagation::Stop
+                }
+                gtk::gdk::Key::Up if entry.text().is_empty() => {
+                    let queries = request_search_history(10);
+                    if queries.is_empty() {
+                        return glib::signal::Propagation::Stop;
+                    }
+                    let hits = synthetic_history_hits(&queries);
+                    update_results(&model, &hits);
+                    status_bar.hide();
                     glib::signal::Propagation::Stop
                 }
                 gtk::gdk::Key::_0 if alt => {
@@ -209,14 +238,24 @@ pub(crate) fn install_keyboard_handler(
         #[strong] selection,
         #[strong] filter_model,
         #[strong] window,
+        #[strong] entry,
         move |_| {
+            let mut should_hide = true;
             selected_hit_in(&selection, &filter_model, |hit| {
+                if let Action::ReplaceQuery { q } = &hit.action {
+                    entry.set_text(q);
+                    entry.set_position(-1);
+                    should_hide = false;
+                    return;
+                }
                 send_record_click(&hit.id.0);
                 if let Err(e) = execute_action(hit) {
                     tracing::error!("Failed to execute action: {}", e);
                 }
             });
-            window.hide();
+            if should_hide {
+                window.hide();
+            }
         }
     ));
 }

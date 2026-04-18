@@ -124,6 +124,64 @@ pub(crate) fn start_ipc_thread() -> IpcClient {
     }
 }
 
+pub(crate) fn send_record_query(q: &str) {
+    let sock = socket_path();
+    let req = Request::RecordQuery { q: q.to_string() };
+    let Ok(json) = serde_json::to_vec(&req) else {
+        return;
+    };
+    let total_len = (2 + json.len()) as u32;
+    let mut buf = Vec::with_capacity(4 + 2 + json.len());
+    buf.extend_from_slice(&total_len.to_be_bytes());
+    buf.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+    buf.extend_from_slice(&json);
+
+    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&sock) {
+        let _ = stream.write_all(&buf);
+    }
+}
+
+pub(crate) fn request_search_history(limit: u32) -> Vec<String> {
+    let sock = socket_path();
+    let req = Request::SearchHistory { limit };
+    let Ok(json) = serde_json::to_vec(&req) else {
+        return Vec::new();
+    };
+    let total_len = (2 + json.len()) as u32;
+    let mut buf = Vec::with_capacity(4 + 2 + json.len());
+    buf.extend_from_slice(&total_len.to_be_bytes());
+    buf.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+    buf.extend_from_slice(&json);
+
+    let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&sock) else {
+        return Vec::new();
+    };
+    if stream.write_all(&buf).is_err() {
+        return Vec::new();
+    }
+
+    let mut header = [0u8; 4];
+    if stream.read_exact(&mut header).is_err() {
+        return Vec::new();
+    }
+    let resp_len = u32::from_be_bytes(header) as usize;
+    if resp_len < 2 {
+        return Vec::new();
+    }
+    let mut version = [0u8; 2];
+    if stream.read_exact(&mut version).is_err() {
+        return Vec::new();
+    }
+    let mut resp_buf = vec![0u8; resp_len - 2];
+    if stream.read_exact(&mut resp_buf).is_err() {
+        return Vec::new();
+    }
+    match serde_json::from_slice::<Response>(&resp_buf) {
+        Ok(Response::Queries(qs)) => qs,
+        _ => Vec::new(),
+    }
+}
+
 pub(crate) fn send_record_click(doc_id: &str) {
     let sock = socket_path();
     let req = Request::RecordClick {

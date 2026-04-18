@@ -152,6 +152,7 @@ pub(crate) fn execute_action(hit: &Hit) -> Result<()> {
                 .spawn()?;
             Ok(())
         }
+        Action::ReplaceQuery { .. } => Ok(()),
     }
 }
 
