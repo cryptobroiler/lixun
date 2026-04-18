@@ -172,6 +172,59 @@ fn show_in_file_manager(path: &std::path::Path) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Attachment decoding + temp-file management
+// ---------------------------------------------------------------------------
+
+pub(crate) fn decode_attachment(raw: &[u8], encoding: &str) -> Result<Vec<u8>> {
+    use base64::Engine;
+    match encoding.to_ascii_lowercase().as_str() {
+        "base64" => {
+            let filtered: Vec<u8> = raw
+                .iter()
+                .copied()
+                .filter(|b| !b.is_ascii_whitespace())
+                .collect();
+            Ok(base64::engine::general_purpose::STANDARD.decode(filtered)?)
+        }
+        "quoted-printable" => Ok(quoted_printable::decode(
+            raw,
+            quoted_printable::ParseMode::Robust,
+        )?),
+        "7bit" | "8bit" | "binary" | "" => Ok(raw.to_vec()),
+        other => anyhow::bail!("unsupported transfer encoding: {other}"),
+    }
+}
+
+pub(crate) fn sanitize_filename(s: &str) -> String {
+    let mut out: String = s
+        .chars()
+        .filter(|c| !matches!(*c, '/' | '\\' | '\0'))
+        .collect();
+    out = out.trim_start_matches('.').to_string();
+    if out.is_empty() {
+        out = "attachment".to_string();
+    }
+    if out.len() > 200 {
+        out.truncate(200);
+    }
+    out
+}
+
+pub(crate) fn sweep_stale_attachments(dir: &std::path::Path, max_age: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for e in entries.flatten() {
+        let Ok(meta) = e.metadata() else { continue };
+        let Ok(mtime) = meta.modified() else { continue };
+        if now.duration_since(mtime).unwrap_or_default() > max_age {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Execute action
 // ---------------------------------------------------------------------------
 
@@ -235,21 +288,49 @@ fn execute_action(hit: &Hit) -> Result<()> {
             byte_offset,
             length,
             mime: _,
-            encoding: _,
-            suggested_filename: _,
+            encoding,
+            suggested_filename,
         } => {
-            let tmp = std::env::temp_dir().join(format!(
-                "lupa-att-{}-{}",
-                std::process::id(),
-                byte_offset
-            ));
             use std::io::{Read, Seek, SeekFrom};
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+            let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+                .ok()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    let uid = unsafe { libc::getuid() };
+                    std::path::PathBuf::from(format!("/tmp/lupa-{uid}"))
+                });
+            let dir = runtime_dir.join("lupa/attachments");
+            std::fs::create_dir_all(&dir)?;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+
+            sweep_stale_attachments(&dir, std::time::Duration::from_secs(600));
+
             let mut f = std::fs::File::open(mbox_path)?;
             f.seek(SeekFrom::Start(*byte_offset))?;
-            let mut data = vec![0u8; *length as usize];
-            f.read_exact(&mut data)?;
-            std::fs::write(&tmp, &data)?;
-            std::process::Command::new("xdg-open").arg(&tmp).spawn()?;
+            let mut raw = vec![0u8; *length as usize];
+            f.read_exact(&mut raw)?;
+
+            let decoded = decode_attachment(&raw, encoding)?;
+
+            let safe = sanitize_filename(suggested_filename);
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let target = dir.join(format!("{ts}-{safe}"));
+            {
+                let mut file = std::fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .mode(0o600)
+                    .open(&target)?;
+                std::io::Write::write_all(&mut file, &decoded)?;
+            }
+            std::process::Command::new("xdg-open")
+                .arg(&target)
+                .spawn()?;
             Ok(())
         }
         Action::OpenParentMail { message_id } => {
@@ -732,7 +813,7 @@ fn animate_hide(window: &gtk::ApplicationWindow) {
 
 #[cfg(test)]
 mod tests {
-    use super::file_uri;
+    use super::{decode_attachment, file_uri, sanitize_filename, sweep_stale_attachments};
     use std::path::Path;
 
     #[test]
@@ -762,5 +843,112 @@ mod tests {
         assert!(!result.contains("%2F"));
         assert!(!result.contains("%2f"));
         assert_eq!(result, "file:///a/b/c/d/e.txt");
+    }
+
+    #[test]
+    fn test_decode_attachment_base64() {
+        use base64::Engine;
+        let plain = b"Hello World";
+        let encoded = base64::engine::general_purpose::STANDARD.encode(plain);
+        let decoded = decode_attachment(encoded.as_bytes(), "base64").unwrap();
+        assert_eq!(decoded, plain);
+    }
+
+    #[test]
+    fn test_decode_attachment_base64_strips_whitespace() {
+        let raw = b"SGVs\r\nbG8=";
+        let decoded = decode_attachment(raw, "base64").unwrap();
+        assert_eq!(decoded, b"Hello");
+    }
+
+    #[test]
+    fn test_decode_attachment_base64_case_insensitive_encoding_label() {
+        let raw = b"SGVsbG8=";
+        let decoded = decode_attachment(raw, "BASE64").unwrap();
+        assert_eq!(decoded, b"Hello");
+    }
+
+    #[test]
+    fn test_decode_attachment_qp() {
+        let decoded = decode_attachment(b"Hello=20World", "quoted-printable").unwrap();
+        assert_eq!(decoded, b"Hello World");
+    }
+
+    #[test]
+    fn test_decode_attachment_passthrough_variants() {
+        for enc in ["7bit", "8bit", "binary", ""] {
+            let decoded = decode_attachment(b"Hello World", enc).unwrap();
+            assert_eq!(decoded, b"Hello World", "encoding={enc}");
+        }
+    }
+
+    #[test]
+    fn test_decode_attachment_unknown_encoding_errors() {
+        let result = decode_attachment(b"data", "rot13");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sanitize_filename_strips_path_traversal() {
+        let s = sanitize_filename("../../../etc/passwd");
+        assert!(!s.contains('/'));
+        assert!(!s.contains('\\'));
+    }
+
+    #[test]
+    fn test_sanitize_filename_strips_backslash_and_nul() {
+        let s = sanitize_filename("foo\\bar\0baz");
+        assert_eq!(s, "foobarbaz");
+    }
+
+    #[test]
+    fn test_sanitize_filename_dot_prefix_stripped() {
+        assert_eq!(sanitize_filename(".hidden"), "hidden");
+        assert_eq!(sanitize_filename("....multi"), "multi");
+    }
+
+    #[test]
+    fn test_sanitize_filename_empty_falls_back() {
+        assert_eq!(sanitize_filename(""), "attachment");
+        assert_eq!(sanitize_filename("///"), "attachment");
+        assert_eq!(sanitize_filename("..."), "attachment");
+    }
+
+    #[test]
+    fn test_sanitize_filename_length_cap() {
+        let long = "a".repeat(500);
+        let out = sanitize_filename(&long);
+        assert!(out.len() <= 200);
+    }
+
+    #[test]
+    fn test_sweep_stale_attachments() {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("lupa-sweep-test-{ts}"));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let old_path = dir.join("old.bin");
+        let fresh_path = dir.join("fresh.bin");
+        std::fs::write(&old_path, b"old").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        std::fs::write(&fresh_path, b"fresh").unwrap();
+
+        sweep_stale_attachments(&dir, std::time::Duration::from_millis(75));
+
+        let old_exists = old_path.exists();
+        let fresh_exists = fresh_path.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(!old_exists, "stale file should be swept");
+        assert!(fresh_exists, "fresh file should survive");
+    }
+
+    #[test]
+    fn test_sweep_stale_attachments_nonexistent_dir_is_noop() {
+        let p = std::path::Path::new("/nonexistent/lupa-sweep-test-path");
+        sweep_stale_attachments(p, std::time::Duration::from_secs(1));
     }
 }
