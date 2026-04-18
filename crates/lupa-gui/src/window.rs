@@ -1,7 +1,6 @@
 //! Main window construction: layer-shell setup, entry + list, keyboard
 //! bindings, animations, Toggle ping to the daemon.
 
-use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -9,7 +8,6 @@ use anyhow::Result;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, LayerShell};
 use lupa_core::Category;
-use lupa_ipc::{socket_path, Request, PROTOCOL_VERSION};
 
 use crate::factory::{add_css_class, create_list_factory, update_results, with_cached_hits};
 use crate::ipc::start_ipc_thread;
@@ -21,49 +19,14 @@ const EMBEDDED_STYLESHEET: &str = include_str!("../style.css");
 
 pub(crate) const DEFAULT_TOP_MARGIN: i32 = 140;
 
-fn window_state_path() -> Option<std::path::PathBuf> {
-    dirs::state_dir()
-        .or_else(dirs::data_local_dir)
-        .map(|d| d.join("lupa/window.json"))
-}
-
-pub(crate) fn save_window_position(top: i32, left: i32) {
-    let Some(path) = window_state_path() else {
-        return;
-    };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let body = format!(r#"{{"top":{top},"left":{left}}}"#);
-    if let Err(e) = std::fs::write(&path, body) {
-        tracing::debug!("Failed to persist window position: {}", e);
-    }
-}
-
-fn load_window_position() -> Option<(i32, i32)> {
-    let path = window_state_path()?;
-    let body = std::fs::read_to_string(&path).ok()?;
-    let top = extract_int(&body, "top")?;
-    let left = extract_int(&body, "left")?;
-    Some((top, left))
-}
-
-fn extract_int(s: &str, key: &str) -> Option<i32> {
-    let needle = format!("\"{key}\":");
-    let idx = s.find(&needle)? + needle.len();
-    let rest = &s[idx..];
-    let end = rest
-        .find(|c: char| c != '-' && !c.is_ascii_digit())
-        .unwrap_or(rest.len());
-    rest[..end].parse().ok()
-}
-
 pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     let ipc = start_ipc_thread();
+    let daemon_config = lupa_daemon::config::Config::load()?;
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .default_width(720)
+        .default_height(560)
         .decorated(false)
         .build();
 
@@ -74,9 +37,8 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     window.set_anchor(Edge::Right, true);
     window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::OnDemand);
 
-    let (top_margin, left_margin) = load_window_position().unwrap_or((DEFAULT_TOP_MARGIN, 0));
-    window.set_margin(Edge::Top, top_margin);
-    window.set_margin(Edge::Left, left_margin);
+    window.set_margin(Edge::Top, DEFAULT_TOP_MARGIN);
+    window.set_margin(Edge::Left, 0);
     window.set_margin(Edge::Right, 0);
     add_css_class(&window, "lupa-window");
 
@@ -92,21 +54,27 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     }
 
     let provider = gtk::CssProvider::new();
-    let css_path = dirs::config_dir()
-        .map(|d| d.join("lupa/style.css"))
-        .filter(|p| p.exists());
-
-    if let Some(path) = css_path {
-        provider.load_from_path(&path);
-        tracing::info!("Loaded external style.css from {:?}", path);
-    } else {
-        provider.load_from_data(EMBEDDED_STYLESHEET);
-    }
+    provider.load_from_string(EMBEDDED_STYLESHEET);
     gtk::style_context_add_provider_for_display(
         &gtk::gdk::Display::default().unwrap(),
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
+
+    let css_path = dirs::config_dir()
+        .map(|d| d.join("lupa/style.css"))
+        .filter(|p| p.exists());
+
+    if let Some(path) = css_path {
+        let override_provider = gtk::CssProvider::new();
+        override_provider.load_from_path(&path);
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().unwrap(),
+            &override_provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
+        tracing::info!("Loaded external style.css from {:?}", path);
+    }
 
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 6);
     vbox.set_margin_start(16);
@@ -123,14 +91,16 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
 
     let current_category: CategoryFilter = std::rc::Rc::new(std::cell::Cell::new(None));
     let chips = build_category_chips(&current_category);
+    chips.container.set_visible(false);
     vbox.append(&chips.container);
 
     let scrolled = gtk::ScrolledWindow::builder()
         .vexpand(true)
-        .min_content_height(60)
-        .max_content_height(400)
+        .min_content_height(320)
+        .max_content_height(520)
         .build();
     add_css_class(&scrolled, "lupa-results");
+    scrolled.set_visible(false);
     vbox.append(&scrolled);
 
     let model = gtk::StringList::new(&[]);
@@ -158,7 +128,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
 
     let selection = gtk::SingleSelection::builder()
         .model(&filter_model)
-        .autoselect(false)
+        .autoselect(true)
         .build();
 
     let list_view = gtk::ListView::builder()
@@ -178,6 +148,11 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     window.set_child(Some(&vbox));
 
     let model2 = model.clone();
+    let filter_for_poll = filter.clone();
+    let selection_for_poll = selection.clone();
+    let list_view_for_poll = list_view.clone();
+    let chips_for_poll = chips.container.clone();
+    let scrolled_for_poll = scrolled.clone();
     let responses = Arc::clone(&ipc.responses);
     let calculation = Arc::clone(&ipc.calculation);
     let epoch = Arc::clone(&ipc.response_epoch);
@@ -185,6 +160,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     let status_for_poll = std::rc::Rc::clone(&status_bar);
     let last_query_for_poll = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
     let last_query_poll_clone = last_query_for_poll.clone();
+    let selection_for_empty = selection.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
         let current = epoch.load(Ordering::SeqCst);
         if current != last_epoch.get() {
@@ -198,17 +174,31 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
                 c.take()
             };
             update_results(&model2, &hits_snapshot);
+            filter_for_poll.changed(gtk::FilterChange::Different);
+            if !hits_snapshot.is_empty() {
+                selection_for_poll.set_selected(0);
+                list_view_for_poll.scroll_to(0, gtk::ListScrollFlags::NONE, None);
+            }
 
             if let Some(calc) = calc_snapshot.as_ref() {
+                chips_for_poll.set_visible(true);
+                scrolled_for_poll.set_visible(false);
                 status_for_poll.show_calculation(calc);
             } else if hits_snapshot.is_empty() {
                 let q = last_query_poll_clone.borrow().clone();
                 if !q.is_empty() {
+                    chips_for_poll.set_visible(true);
+                    scrolled_for_poll.set_visible(false);
                     status_for_poll.show_empty(&q);
+                    selection_for_empty.set_selected(gtk::INVALID_LIST_POSITION);
                 } else {
+                    chips_for_poll.set_visible(false);
+                    scrolled_for_poll.set_visible(false);
                     status_for_poll.hide();
                 }
             } else {
+                chips_for_poll.set_visible(true);
+                scrolled_for_poll.set_visible(true);
                 status_for_poll.hide();
             }
         }
@@ -220,6 +210,8 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     let ipc_for_entry = ipc.clone();
     let status_for_entry = std::rc::Rc::clone(&status_bar);
     let model_for_entry = model.clone();
+    let chips_for_entry = chips.container.clone();
+    let scrolled_for_entry = scrolled.clone();
     let last_query_for_entry = last_query_for_poll.clone();
     let pending_source_for_entry = std::rc::Rc::clone(&pending_source);
     entry.connect_changed(move |e| {
@@ -234,9 +226,13 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
             for _ in 0..n {
                 model_for_entry.remove(0);
             }
+            chips_for_entry.set_visible(false);
+            scrolled_for_entry.set_visible(false);
             status_for_entry.hide();
             return;
         }
+
+        chips_for_entry.set_visible(true);
 
         let ipc = ipc_for_entry.clone();
         let status = std::rc::Rc::clone(&status_for_entry);
@@ -246,7 +242,6 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         let id = glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
             *last_q.borrow_mut() = q.clone();
             status.show_loading();
-            crate::ipc::send_record_query(&q);
             let _ = ipc.request_tx.send((q, 30));
             *pending_self.borrow_mut() = None;
         });
@@ -264,9 +259,8 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         std::rc::Rc::clone(&chips_rc),
         std::rc::Rc::clone(&status_bar),
         ipc.clone(),
+        daemon_config.keybindings.clone(),
     );
-
-    install_drag_handler(&window);
 
     let focus_ctrl = gtk::EventControllerFocus::new();
     let window_for_focus = window.clone();
@@ -276,21 +270,6 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     window.add_controller(focus_ctrl);
 
     animate_show(&window);
-
-    let sock = socket_path();
-    if sock.exists() {
-        let req = Request::Toggle;
-        if let Ok(json) = serde_json::to_vec(&req) {
-            let total_len = (2 + json.len()) as u32;
-            let _ = std::os::unix::net::UnixStream::connect(&sock).and_then(|mut s| {
-                let mut buf = Vec::with_capacity(4 + 2 + json.len());
-                buf.extend_from_slice(&total_len.to_be_bytes());
-                buf.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
-                buf.extend_from_slice(&json);
-                s.write_all(&buf)
-            });
-        }
-    }
 
     tracing::info!("Lupa GUI window shown");
     Ok(())
@@ -373,43 +352,10 @@ fn build_category_chips(current: &CategoryFilter) -> CategoryChips {
     }
 }
 
-fn install_drag_handler(window: &gtk::ApplicationWindow) {
-    let drag = gtk::GestureDrag::new();
-    drag.set_propagation_phase(gtk::PropagationPhase::Capture);
-
-    let start_top = std::rc::Rc::new(std::cell::Cell::new(0i32));
-    let start_left = std::rc::Rc::new(std::cell::Cell::new(0i32));
-
-    let w = window.clone();
-    let st = std::rc::Rc::clone(&start_top);
-    let sl = std::rc::Rc::clone(&start_left);
-    drag.connect_drag_begin(move |_, _, _| {
-        st.set(w.margin(Edge::Top));
-        sl.set(w.margin(Edge::Left));
-    });
-
-    let w = window.clone();
-    let st = std::rc::Rc::clone(&start_top);
-    let sl = std::rc::Rc::clone(&start_left);
-    drag.connect_drag_update(move |_, dx, dy| {
-        let new_top = (st.get() as f64 + dy).max(0.0) as i32;
-        let new_left = (sl.get() as f64 + dx) as i32;
-        w.set_margin(Edge::Top, new_top);
-        w.set_margin(Edge::Left, new_left);
-    });
-
-    let w = window.clone();
-    drag.connect_drag_end(move |_, _, _| {
-        save_window_position(w.margin(Edge::Top), w.margin(Edge::Left));
-    });
-
-    window.add_controller(drag);
-}
-
 fn animate_show(window: &gtk::ApplicationWindow) {
     window.remove_css_class("lupa-hiding");
     window.add_css_class("lupa-showing");
-    window.show();
+    window.set_visible(true);
 
     let window_weak = window.clone();
     glib::timeout_add_local_once(std::time::Duration::from_millis(120), move || {
@@ -423,7 +369,9 @@ fn animate_hide(window: &gtk::ApplicationWindow) {
 
     let window_weak = window.clone();
     glib::timeout_add_local_once(std::time::Duration::from_millis(120), move || {
-        window_weak.hide();
-        window_weak.remove_css_class("lupa-hiding");
+        window_weak.close();
+        if let Some(app) = window_weak.application() {
+            app.quit();
+        }
     });
 }

@@ -15,7 +15,7 @@ pub(crate) const ICON_SIZE_NORMAL: i32 = 32;
 pub(crate) const ICON_SIZE_TOP_HIT: i32 = 48;
 
 pub(crate) fn add_css_class<W: gtk::prelude::WidgetExt>(widget: &W, class: &str) {
-    widget.style_context().add_class(class);
+    widget.add_css_class(class);
 }
 
 fn category_kind_fallback(cat: &Category) -> &'static str {
@@ -226,50 +226,18 @@ fn install_drag_source(row: &gtk::Box, hit: &Hit) {
     let drag = gtk::DragSource::new();
     drag.set_actions(gdk::DragAction::COPY);
 
-    let file = gio::File::for_path(&path);
-    let content = gdk::ContentProvider::for_value(&file.to_value());
-    drag.set_content(Some(&content));
-
-    let cat = hit.category;
     let hit_for_icon = hit.clone();
     drag.connect_prepare(move |source, _x, _y| {
+        let file = gio::File::for_path(&path);
+        let uri = file.uri();
+        let content = gdk::ContentProvider::for_value(&uri.to_value());
         if let Some(paintable) = resolve_icon(&hit_for_icon, ICON_SIZE_NORMAL) {
             source.set_icon(Some(&paintable), 0, 0);
         }
-        let _ = cat;
-        None
+        Some(content)
     });
 
     row.add_controller(drag);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn menu_for_file_has_expected_items() {
-        let menu = build_menu_for(&Category::File);
-        assert_eq!(menu.n_items(), 5);
-    }
-
-    #[test]
-    fn menu_for_app_has_expected_items() {
-        let menu = build_menu_for(&Category::App);
-        assert_eq!(menu.n_items(), 2);
-    }
-
-    #[test]
-    fn menu_for_mail_has_expected_items() {
-        let menu = build_menu_for(&Category::Mail);
-        assert_eq!(menu.n_items(), 2);
-    }
-
-    #[test]
-    fn menu_for_attachment_has_expected_items() {
-        let menu = build_menu_for(&Category::Attachment);
-        assert_eq!(menu.n_items(), 4);
-    }
 }
 
 pub(crate) fn create_list_factory() -> gtk::SignalListItemFactory {
@@ -382,4 +350,33 @@ pub(crate) fn create_list_factory() -> gtk::SignalListItemFactory {
     });
 
     factory
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_for_file_has_expected_items() {
+        let menu = build_menu_for(&Category::File);
+        assert_eq!(menu.n_items(), 5);
+    }
+
+    #[test]
+    fn menu_for_app_has_expected_items() {
+        let menu = build_menu_for(&Category::App);
+        assert_eq!(menu.n_items(), 2);
+    }
+
+    #[test]
+    fn menu_for_mail_has_expected_items() {
+        let menu = build_menu_for(&Category::Mail);
+        assert_eq!(menu.n_items(), 2);
+    }
+
+    #[test]
+    fn menu_for_attachment_has_expected_items() {
+        let menu = build_menu_for(&Category::Attachment);
+        assert_eq!(menu.n_items(), 4);
+    }
 }

@@ -6,14 +6,21 @@
 
 use glib::clone;
 use gtk::prelude::*;
-use gtk4_layer_shell::{Edge, LayerShell};
+use lupa_daemon::config::Keybindings;
 use lupa_core::Action;
 
 use crate::actions::{copy_to_clipboard, execute_action, execute_secondary_action, quick_look};
 use crate::factory::{synthetic_history_hits, update_results, with_cached_hits};
 use crate::ipc::{request_search_history, send_record_click, IpcClient};
 use crate::status::StatusBar;
-use crate::window::{save_window_position, CategoryChips, DEFAULT_TOP_MARGIN};
+use crate::window::CategoryChips;
+
+fn close_launcher(window: &gtk::ApplicationWindow) {
+    window.close();
+    if let Some(app) = window.application() {
+        app.quit();
+    }
+}
 
 fn selected_hit_in<F: FnOnce(&lupa_core::Hit)>(
     selection: &gtk::SingleSelection,
@@ -75,6 +82,13 @@ fn jump_to_next_category(
     }
 }
 
+fn accel_matches(accel: &str, key: gtk::gdk::Key, state: gtk::gdk::ModifierType) -> bool {
+    let Some((expected_key, expected_mods)) = gtk::accelerator_parse(accel) else {
+        return false;
+    };
+    key == expected_key && state.contains(expected_mods)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn install_keyboard_handler(
     window: &gtk::ApplicationWindow,
@@ -86,51 +100,66 @@ pub(crate) fn install_keyboard_handler(
     chips: std::rc::Rc<CategoryChips>,
     status_bar: std::rc::Rc<StatusBar>,
     _ipc: IpcClient,
+    keybindings: Keybindings,
 ) {
+    // Main key controller attached to window with Capture phase
+    // This ensures all key handling works regardless of focus state
     let key_controller = gtk::EventControllerKey::new();
+    key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
     key_controller.connect_key_pressed(clone!(
         #[strong] selection,
         #[strong] filter_model,
+        #[strong] list_view,
         #[strong] window,
         #[strong] entry,
         #[strong] chips,
+        #[strong] keybindings,
         move |_, key, _keycode, state| {
             let ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
             let shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
-            let alt = state.contains(gtk::gdk::ModifierType::ALT_MASK);
-
-            match key {
-                gtk::gdk::Key::Up => {
+            if accel_matches(&keybindings.previous_result, key, state) {
+                    // Up on empty entry = let entry_key_controller handle history
                     if entry.text().is_empty() && entry.is_focus() {
                         return glib::signal::Propagation::Proceed;
                     }
                     if ctrl {
                         jump_to_next_category(&selection, &filter_model, -1);
+                        let target = selection.selected();
+                        if target != gtk::INVALID_LIST_POSITION {
+                            list_view.scroll_to(target, gtk::ListScrollFlags::NONE, None);
+                        }
                         return glib::signal::Propagation::Stop;
                     }
                     let current = selection.selected();
                     if current > 0 {
-                        selection.set_selected(current - 1);
+                        let target = current - 1;
+                        selection.set_selected(target);
+                        list_view.scroll_to(target, gtk::ListScrollFlags::NONE, None);
                     }
                     glib::signal::Propagation::Stop
-                }
-                gtk::gdk::Key::Down => {
+            } else if accel_matches(&keybindings.next_result, key, state) {
                     if ctrl {
                         jump_to_next_category(&selection, &filter_model, 1);
+                        let target = selection.selected();
+                        if target != gtk::INVALID_LIST_POSITION {
+                            list_view.scroll_to(target, gtk::ListScrollFlags::NONE, None);
+                        }
                         return glib::signal::Propagation::Stop;
                     }
                     let current = selection.selected();
                     let n = selection.n_items();
                     if current + 1 < n {
-                        selection.set_selected(current + 1);
+                        let target = current + 1;
+                        selection.set_selected(target);
+                        list_view.scroll_to(target, gtk::ListScrollFlags::NONE, None);
                     }
                     glib::signal::Propagation::Stop
-                }
-                gtk::gdk::Key::Escape => {
-                    window.hide();
+            } else if accel_matches(&keybindings.close, key, state) {
+                    close_launcher(&window);
                     glib::signal::Propagation::Stop
-                }
-                gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter => {
+            } else if accel_matches(&keybindings.primary_action, key, state)
+                || accel_matches(&keybindings.secondary_action, key, state)
+            {
                     let mut should_hide = true;
                     selected_hit_in(&selection, &filter_model, |hit| {
                         if let Action::ReplaceQuery { q } = &hit.action {
@@ -141,7 +170,7 @@ pub(crate) fn install_keyboard_handler(
                             return;
                         }
                         send_record_click(&hit.id.0);
-                        let result = if shift || ctrl {
+                        let result = if accel_matches(&keybindings.secondary_action, key, state) || shift || ctrl {
                             execute_secondary_action(hit)
                         } else {
                             execute_action(hit)
@@ -151,111 +180,68 @@ pub(crate) fn install_keyboard_handler(
                         }
                     });
                     if should_hide {
-                        window.hide();
+                        close_launcher(&window);
                     }
                     glib::signal::Propagation::Stop
-                }
-                gtk::gdk::Key::c | gtk::gdk::Key::C if ctrl => {
+            } else if accel_matches(&keybindings.copy, key, state) {
                     selected_hit_in(&selection, &filter_model, copy_to_clipboard);
                     glib::signal::Propagation::Stop
-                }
-                gtk::gdk::Key::space if !entry.is_focus() => {
+            } else if accel_matches(&keybindings.quick_look, key, state) && !entry.is_focus() {
+                    // Only trigger quick_look when focus is NOT in entry (i.e. list is focused)
+                    // This allows space to be typed in the entry
                     selected_hit_in(&selection, &filter_model, |hit| {
                         if let Err(e) = quick_look(hit) {
                             tracing::error!("Quick Look failed: {}", e);
                         }
                     });
                     glib::signal::Propagation::Stop
-                }
-                gtk::gdk::Key::_0 if alt => {
-                    window.set_margin(Edge::Top, DEFAULT_TOP_MARGIN);
-                    window.set_margin(Edge::Left, 0);
-                    save_window_position(DEFAULT_TOP_MARGIN, 0);
-                    glib::signal::Propagation::Stop
-                }
-                gtk::gdk::Key::_0 if ctrl => {
+            } else if accel_matches(&keybindings.filter_all, key, state) {
                     chips.activate_index(0);
                     glib::signal::Propagation::Stop
-                }
-                gtk::gdk::Key::_1 if ctrl => {
+            } else if accel_matches(&keybindings.filter_apps, key, state) {
                     chips.activate_index(1);
                     glib::signal::Propagation::Stop
-                }
-                gtk::gdk::Key::_2 if ctrl => {
+            } else if accel_matches(&keybindings.filter_files, key, state) {
                     chips.activate_index(2);
                     glib::signal::Propagation::Stop
-                }
-                gtk::gdk::Key::_3 if ctrl => {
+            } else if accel_matches(&keybindings.filter_mail, key, state) {
                     chips.activate_index(3);
                     glib::signal::Propagation::Stop
-                }
-                gtk::gdk::Key::_4 if ctrl => {
+            } else if accel_matches(&keybindings.filter_attachments, key, state) {
                     chips.activate_index(4);
                     glib::signal::Propagation::Stop
-                }
-                _ => glib::signal::Propagation::Proceed,
+            } else {
+                glib::signal::Propagation::Proceed
             }
         }
     ));
-    list_view.add_controller(key_controller);
+    window.add_controller(key_controller);
 
+    // Entry-level key controller for history navigation when entry is focused and empty
     let entry_key_controller = gtk::EventControllerKey::new();
     entry_key_controller.connect_key_pressed(clone!(
-        #[strong] window,
         #[strong] entry,
+        #[strong] selection,
         #[strong] model,
+        #[strong] list_view,
         #[strong] status_bar,
+        #[strong] keybindings,
         move |_, key, _keycode, state| {
-            let alt = state.contains(gtk::gdk::ModifierType::ALT_MASK);
-            match key {
-                gtk::gdk::Key::Escape => {
-                    window.hide();
-                    glib::signal::Propagation::Stop
-                }
-                gtk::gdk::Key::Up if entry.text().is_empty() => {
+            if accel_matches(&keybindings.history_up, key, state) && entry.text().is_empty() {
                     let queries = request_search_history(10);
                     if queries.is_empty() {
                         return glib::signal::Propagation::Stop;
                     }
                     let hits = synthetic_history_hits(&queries);
                     update_results(&model, &hits);
+                    selection.set_selected(0);
+                    list_view.scroll_to(0, gtk::ListScrollFlags::NONE, None);
                     status_bar.hide();
                     glib::signal::Propagation::Stop
-                }
-                gtk::gdk::Key::_0 if alt => {
-                    window.set_margin(Edge::Top, DEFAULT_TOP_MARGIN);
-                    window.set_margin(Edge::Left, 0);
-                    save_window_position(DEFAULT_TOP_MARGIN, 0);
-                    glib::signal::Propagation::Stop
-                }
-                _ => glib::signal::Propagation::Proceed,
+            } else {
+                glib::signal::Propagation::Proceed
             }
         }
     ));
     entry.add_controller(entry_key_controller);
-
-    entry.connect_activate(clone!(
-        #[strong] selection,
-        #[strong] filter_model,
-        #[strong] window,
-        #[strong] entry,
-        move |_| {
-            let mut should_hide = true;
-            selected_hit_in(&selection, &filter_model, |hit| {
-                if let Action::ReplaceQuery { q } = &hit.action {
-                    entry.set_text(q);
-                    entry.set_position(-1);
-                    should_hide = false;
-                    return;
-                }
-                send_record_click(&hit.id.0);
-                if let Err(e) = execute_action(hit) {
-                    tracing::error!("Failed to execute action: {}", e);
-                }
-            });
-            if should_hide {
-                window.hide();
-            }
-        }
-    ));
 }
