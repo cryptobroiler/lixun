@@ -52,7 +52,7 @@ impl crate::Source for ThunderbirdAttachmentsSource {
                 let Ok(mbox_bytes) = std::fs::read(path) else {
                     continue;
                 };
-                let Ok(parts) = mbox::parse_mbox_parts(path) else {
+                let Ok(parts) = mbox::parse_mbox_parts_from_bytes(&mbox_bytes, path) else {
                     continue;
                 };
 

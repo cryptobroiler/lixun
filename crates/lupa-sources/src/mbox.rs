@@ -162,9 +162,13 @@ pub fn fallback_id(path: &Path, offset: u64) -> String {
 
 pub fn parse_mbox_parts(path: &Path) -> Result<Vec<MboxPart>> {
     let bytes = std::fs::read(path)?;
+    parse_mbox_parts_from_bytes(&bytes, path)
+}
+
+pub fn parse_mbox_parts_from_bytes(bytes: &[u8], path: &Path) -> Result<Vec<MboxPart>> {
     let mut results = Vec::new();
 
-    for (msg_offset, msg_slice) in split_mbox_messages(&bytes) {
+    for (msg_offset, msg_slice) in split_mbox_messages(bytes) {
         let Some((message_start_in_msg, message_bytes)) = strip_mbox_envelope(msg_slice) else {
             continue;
         };
@@ -565,5 +569,28 @@ mod tests {
         assert!(input.len() > 200);
         let out = sanitize_filename(&input);
         assert!(out.len() <= 200);
+    }
+
+    #[test]
+    fn test_parse_mbox_parts_from_bytes_equivalence() {
+        let fixture = base64_pdf_fixture("\n");
+        let (_dir, path) = write_fixture("inbox", &fixture);
+        let parts_from_path = parse_mbox_parts(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let parts_from_bytes = parse_mbox_parts_from_bytes(&bytes, &path).unwrap();
+        assert_eq!(parts_from_bytes.len(), parts_from_path.len());
+        assert_eq!(parts_from_bytes[0].filename, parts_from_path[0].filename);
+        assert_eq!(
+            parts_from_bytes[0].part_body_byte_offset,
+            parts_from_path[0].part_body_byte_offset
+        );
+        assert_eq!(
+            parts_from_bytes[0].part_body_length,
+            parts_from_path[0].part_body_length
+        );
+        assert_eq!(
+            parts_from_bytes[0].message_id,
+            parts_from_path[0].message_id
+        );
     }
 }
