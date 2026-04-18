@@ -1,0 +1,128 @@
+//! IPC client: background thread sending search requests and a fire-and-forget
+//! record-click helper.
+
+use std::io::{Read, Write};
+use std::sync::{mpsc, Arc, Mutex};
+
+use lupa_core::Hit;
+use lupa_ipc::{socket_path, Request, Response, PROTOCOL_VERSION};
+
+pub(crate) struct IpcClient {
+    pub(crate) request_tx: mpsc::Sender<(String, u32)>,
+    pub(crate) responses: Arc<Mutex<Vec<Hit>>>,
+}
+
+impl Clone for IpcClient {
+    fn clone(&self) -> Self {
+        Self {
+            request_tx: self.request_tx.clone(),
+            responses: Arc::clone(&self.responses),
+        }
+    }
+}
+
+pub(crate) fn start_ipc_thread() -> IpcClient {
+    let (tx, rx) = mpsc::channel::<(String, u32)>();
+    let responses: Arc<Mutex<Vec<Hit>>> = Arc::new(Mutex::new(Vec::new()));
+    let resp_clone = Arc::clone(&responses);
+
+    std::thread::spawn(move || {
+        while let Ok((query, limit)) = rx.recv() {
+            let sock = socket_path();
+            let req = Request::Search { q: query, limit };
+            let json = match serde_json::to_vec(&req) {
+                Ok(j) => j,
+                Err(e) => {
+                    tracing::error!("Failed to serialize search request: {}", e);
+                    continue;
+                }
+            };
+            let total_len = (2 + json.len()) as u32;
+            let mut buf = Vec::with_capacity(4 + 2 + json.len());
+            buf.extend_from_slice(&total_len.to_be_bytes());
+            buf.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+            buf.extend_from_slice(&json);
+
+            let mut stream = match std::os::unix::net::UnixStream::connect(&sock) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!("Failed to connect to daemon at {:?}: {}", sock, e);
+                    continue;
+                }
+            };
+
+            if let Err(e) = stream.write_all(&buf) {
+                tracing::error!("Failed to send search request: {}", e);
+                continue;
+            }
+
+            let mut header = [0u8; 4];
+            if let Err(e) = stream.read_exact(&mut header) {
+                tracing::error!("Failed to read response header: {}", e);
+                continue;
+            }
+            let resp_len = u32::from_be_bytes(header) as usize;
+            if resp_len < 2 {
+                tracing::error!("Response frame too short");
+                continue;
+            }
+            let mut _version = [0u8; 2];
+            if let Err(e) = stream.read_exact(&mut _version) {
+                tracing::error!("Failed to read response version: {}", e);
+                continue;
+            }
+            let mut resp_buf = vec![0u8; resp_len - 2];
+            if let Err(e) = stream.read_exact(&mut resp_buf) {
+                tracing::error!("Failed to read response body: {}", e);
+                continue;
+            }
+
+            match serde_json::from_slice::<Response>(&resp_buf) {
+                Ok(Response::Hits(hits)) => {
+                    if let Ok(mut r) = resp_clone.lock() {
+                        *r = hits;
+                    }
+                }
+                Ok(Response::HitsWithExtras {
+                    hits,
+                    calculation: _,
+                }) => {
+                    if let Ok(mut r) = resp_clone.lock() {
+                        *r = hits;
+                    }
+                }
+                Ok(Response::Error(msg)) => {
+                    tracing::error!("Daemon error: {}", msg);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::error!("Failed to parse response: {}", e);
+                }
+            }
+        }
+    });
+
+    IpcClient {
+        request_tx: tx,
+        responses,
+    }
+}
+
+pub(crate) fn send_record_click(doc_id: &str) {
+    let sock = socket_path();
+    let req = Request::RecordClick {
+        doc_id: doc_id.to_string(),
+    };
+    let Ok(json) = serde_json::to_vec(&req) else {
+        return;
+    };
+    let total_len = (2 + json.len()) as u32;
+    let mut buf = Vec::with_capacity(4 + 2 + json.len());
+    buf.extend_from_slice(&total_len.to_be_bytes());
+    buf.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+    buf.extend_from_slice(&json);
+
+    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&sock) {
+        let _ = stream.write_all(&buf);
+    }
+}
