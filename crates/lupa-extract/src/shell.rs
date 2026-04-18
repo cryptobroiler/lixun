@@ -1,8 +1,10 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use std::io::Read;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
+use tempfile::NamedTempFile;
 use wait_timeout::ChildExt;
 
 pub trait CommandRunner {
@@ -99,45 +101,49 @@ pub fn command_exists(cmd: &str) -> bool {
 }
 
 pub fn extract_doc(bytes: &[u8], runner: &dyn CommandRunner) -> Result<String> {
-    let tmp = write_temp(bytes, "doc")?;
-    let text = runner.run("antiword", &["-m", "UTF-8", tmp.to_str().unwrap()], None)?;
-    let _ = std::fs::remove_file(&tmp);
-    Ok(text)
+    let (path, _handle) = write_temp_named("lupa-shell", "doc", bytes)?;
+    let path_str = path.to_str().context("non-UTF8 tempfile path")?;
+    runner.run("antiword", &["-m", "UTF-8", path_str], None)
 }
 
 pub fn extract_xls(bytes: &[u8], runner: &dyn CommandRunner) -> Result<String> {
-    let tmp = write_temp(bytes, "xls")?;
-    let text = runner.run("catdoc", &[tmp.to_str().unwrap()], None)?;
-    let _ = std::fs::remove_file(&tmp);
-    Ok(text)
+    let (path, _handle) = write_temp_named("lupa-shell", "xls", bytes)?;
+    let path_str = path.to_str().context("non-UTF8 tempfile path")?;
+    runner.run("catdoc", &[path_str], None)
 }
 
 pub fn extract_ppt(bytes: &[u8], runner: &dyn CommandRunner) -> Result<String> {
-    let tmp = write_temp(bytes, "ppt")?;
-    let text = runner.run(
-        "libreoffice",
-        &["--headless", "--cat", tmp.to_str().unwrap()],
-        None,
-    )?;
-    let _ = std::fs::remove_file(&tmp);
-    Ok(text)
+    let (path, _handle) = write_temp_named("lupa-shell", "ppt", bytes)?;
+    let path_str = path.to_str().context("non-UTF8 tempfile path")?;
+    runner.run("libreoffice", &["--headless", "--cat", path_str], None)
 }
 
 pub fn extract_pdf(bytes: &[u8], runner: &dyn CommandRunner) -> Result<String> {
-    let tmp = write_temp(bytes, "pdf")?;
-    let text = runner.run(
+    let (path, _handle) = write_temp_named("lupa-shell", "pdf", bytes)?;
+    let path_str = path.to_str().context("non-UTF8 tempfile path")?;
+    runner.run(
         "pdftotext",
-        &["-layout", "-enc", "UTF-8", tmp.to_str().unwrap(), "-"],
+        &["-layout", "-enc", "UTF-8", path_str, "-"],
         None,
-    )?;
-    let _ = std::fs::remove_file(&tmp);
-    Ok(text)
+    )
 }
 
-fn write_temp(bytes: &[u8], ext: &str) -> Result<std::path::PathBuf> {
-    let tmp = std::env::temp_dir().join(format!("lupa-shell-{}.{}", std::process::id(), ext));
-    std::fs::write(&tmp, bytes)?;
-    Ok(tmp)
+/// Write bytes to a securely-created temp file with the given extension.
+///
+/// Returns the path AND the `NamedTempFile` handle. The caller MUST keep the handle
+/// alive until the path is no longer needed; the file is deleted when the handle drops.
+///
+/// Security: uses `tempfile::Builder` with an 8-byte random suffix to produce an
+/// unpredictable filename, preventing symlink pre-planting attacks that were possible
+/// with the previous PID-only scheme in shared `/tmp`.
+pub fn write_temp_named(prefix: &str, ext: &str, bytes: &[u8]) -> Result<(PathBuf, NamedTempFile)> {
+    let handle = tempfile::Builder::new()
+        .prefix(&format!("{prefix}-"))
+        .suffix(&format!(".{ext}"))
+        .rand_bytes(8)
+        .tempfile()?;
+    std::fs::write(handle.path(), bytes)?;
+    Ok((handle.path().to_path_buf(), handle))
 }
 
 #[cfg(test)]
@@ -166,6 +172,18 @@ mod tests {
         let runner = SystemRunner::new(0);
         let out = runner.run("sh", &["-c", "echo ok"], None).unwrap();
         assert!(out.contains("ok"));
+    }
+
+    #[test]
+    fn test_write_temp_returns_unique_paths() {
+        let (p1, _h1) = write_temp_named("test-prefix", "txt", b"first").unwrap();
+        let (p2, _h2) = write_temp_named("test-prefix", "txt", b"second").unwrap();
+        assert_ne!(p1, p2);
+        assert_eq!(std::fs::read(&p1).unwrap(), b"first");
+        assert_eq!(std::fs::read(&p2).unwrap(), b"second");
+        let name1 = p1.file_name().unwrap().to_string_lossy();
+        assert!(name1.starts_with("test-prefix-"));
+        assert!(name1.ends_with(".txt"));
     }
 
     #[test]

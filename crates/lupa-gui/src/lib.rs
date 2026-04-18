@@ -214,6 +214,23 @@ pub(crate) fn sanitize_filename(s: &str) -> String {
     out
 }
 
+/// Return the secure per-user runtime directory. If `XDG_RUNTIME_DIR` is not set,
+/// refuse the `/tmp` fallback (world-writable and vulnerable to symlink attacks)
+/// and return an informative error instead.
+pub(crate) fn secure_runtime_dir_from_env(
+    xdg_runtime_dir: Option<&std::path::Path>,
+) -> Result<std::path::PathBuf> {
+    let dir = xdg_runtime_dir.ok_or_else(|| {
+        anyhow::anyhow!(
+            "XDG_RUNTIME_DIR is not set; refusing to use /tmp fallback (security: \
+             /tmp is world-writable and vulnerable to symlink attacks). \
+             If running outside a systemd-logind session, set XDG_RUNTIME_DIR to a \
+             private directory you own (e.g. ~/.cache/lupa-runtime with 0700 perms)."
+        )
+    })?;
+    Ok(dir.to_path_buf())
+}
+
 pub(crate) fn sweep_stale_attachments(dir: &std::path::Path, max_age: std::time::Duration) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -298,13 +315,9 @@ fn execute_action(hit: &Hit) -> Result<()> {
             use std::io::{Read, Seek, SeekFrom};
             use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-            let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-                .ok()
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| {
-                    let uid = unsafe { libc::getuid() };
-                    std::path::PathBuf::from(format!("/tmp/lupa-{uid}"))
-                });
+            let xdg_dir_str = std::env::var("XDG_RUNTIME_DIR").ok();
+            let xdg_dir = xdg_dir_str.as_ref().map(std::path::Path::new);
+            let runtime_dir = secure_runtime_dir_from_env(xdg_dir)?;
             let dir = runtime_dir.join("lupa/attachments");
             std::fs::create_dir_all(&dir)?;
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
@@ -817,7 +830,10 @@ fn animate_hide(window: &gtk::ApplicationWindow) {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_attachment, file_uri, sanitize_filename, sweep_stale_attachments};
+    use super::{
+        decode_attachment, file_uri, sanitize_filename, secure_runtime_dir_from_env,
+        sweep_stale_attachments,
+    };
     use std::path::Path;
 
     #[test]
@@ -965,6 +981,24 @@ mod tests {
         // Result must be valid UTF-8 and <=200 bytes
         assert!(out.len() <= 200);
         // Must not panic — reaching this line means success
+    }
+
+    #[test]
+    fn test_secure_runtime_dir_returns_xdg_when_set() {
+        let p = Path::new("/run/user/1000");
+        let result = secure_runtime_dir_from_env(Some(p)).unwrap();
+        assert_eq!(result, p);
+    }
+
+    #[test]
+    fn test_secure_runtime_dir_refuses_fallback() {
+        let result = secure_runtime_dir_from_env(None);
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.to_lowercase().contains("xdg_runtime_dir"),
+            "error message should mention XDG_RUNTIME_DIR, got: {err}"
+        );
     }
 
     #[test]
