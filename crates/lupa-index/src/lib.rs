@@ -1,19 +1,23 @@
 //! Lupa Index — Tantivy wrapper: schema, writer, searcher.
 
+pub mod tokenizer;
+
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tantivy::{
     collector::TopDocs,
     directory::MmapDirectory,
     doc,
-    query::{BooleanQuery, FuzzyTermQuery, Occur, Query as TQuery},
-    schema::{Schema, Value, STORED, STRING, TEXT},
-    Index, IndexWriter, TantivyDocument, Term,
+    query::{BooleanQuery, QueryParser},
+    schema::{
+        IndexRecordOption, Schema, TextFieldIndexing, TextOptions, Value, STORED, STRING, TEXT,
+    },
+    Index, IndexWriter, TantivyDocument,
 };
 
 use lupa_core::{Category, Document, Hit, Query};
 
-const INDEX_VERSION: u32 = 2;
+const INDEX_VERSION: u32 = 3;
 const INDEX_VERSION_FILE: &str = "index_version.txt";
 
 /// Tantivy schema fields.
@@ -22,6 +26,7 @@ pub struct LupaSchema {
     pub id: tantivy::schema::Field,
     pub category: tantivy::schema::Field,
     pub title: tantivy::schema::Field,
+    pub title_terms: tantivy::schema::Field,
     pub subtitle: tantivy::schema::Field,
     pub icon_name: tantivy::schema::Field,
     pub kind_label: tantivy::schema::Field,
@@ -36,15 +41,28 @@ pub struct LupaSchema {
 impl LupaSchema {
     pub fn build() -> Self {
         let mut builder = tantivy::schema::Schema::builder();
+        let spotlight_indexing = || {
+            TextFieldIndexing::default()
+                .set_tokenizer("spotlight")
+                .set_index_option(IndexRecordOption::WithFreqsAndPositions)
+        };
+        let stored_spotlight_text = || {
+            TextOptions::default()
+                .set_indexing_options(spotlight_indexing())
+                .set_stored()
+        };
+        let indexed_spotlight_text =
+            || TextOptions::default().set_indexing_options(spotlight_indexing());
 
         let id = builder.add_text_field("id", STRING | STORED);
         let category = builder.add_text_field("category", TEXT | STORED);
-        let title = builder.add_text_field("title", TEXT | STORED);
+        let title = builder.add_text_field("title", stored_spotlight_text());
+        let title_terms = builder.add_text_field("title_terms", indexed_spotlight_text());
         let subtitle = builder.add_text_field("subtitle", STORED);
         let icon_name = builder.add_text_field("icon_name", STORED);
         let kind_label = builder.add_text_field("kind_label", STORED);
-        let body = builder.add_text_field("body", TEXT);
-        let path = builder.add_text_field("path", TEXT | STORED);
+        let body = builder.add_text_field("body", indexed_spotlight_text());
+        let path = builder.add_text_field("path", stored_spotlight_text());
         let mtime = builder.add_i64_field("mtime", STORED);
         let size = builder.add_u64_field("size", STORED);
         let action = builder.add_text_field("action", STORED);
@@ -57,6 +75,7 @@ impl LupaSchema {
             id,
             category,
             title,
+            title_terms,
             subtitle,
             icon_name,
             kind_label,
@@ -100,6 +119,8 @@ impl LupaIndex {
             index
         };
 
+        tokenizer::register_spotlight_tokenizer(&index);
+
         Ok(Self { index, schema })
     }
 
@@ -115,11 +136,13 @@ impl LupaIndex {
         writer.delete_term(term);
 
         let action_json = serde_json::to_string(&doc.action)?;
+        let title_split = tokenizer::split_identifiers(&doc.title);
 
         writer.add_document(doc![
             s.id => doc.id.0.as_str(),
             s.category => doc.category.as_str(),
             s.title => doc.title.as_str(),
+            s.title_terms => title_split.as_str(),
             s.subtitle => doc.subtitle.as_str(),
             s.icon_name => doc.icon_name.as_deref().unwrap_or(""),
             s.kind_label => doc.kind_label.as_deref().unwrap_or(""),
@@ -151,7 +174,7 @@ impl LupaIndex {
         let searcher = reader.searcher();
         let s = &self.schema;
 
-        let query_obj = build_fuzzy_query(&query.text, s);
+        let query_obj = build_search_query(&query.text, &self.index, s);
         let top_docs = searcher.search(&query_obj, &TopDocs::with_limit(query.limit as usize))?;
 
         let mut results = Vec::new();
@@ -272,33 +295,58 @@ fn recreate_index_dir(index_dir: &Path, old_version: Option<String>) -> Result<(
     Ok(())
 }
 
-fn build_fuzzy_query(text: &str, s: &LupaSchema) -> Box<dyn TQuery> {
-    let terms: Vec<&str> = text.split_whitespace().collect();
-    if terms.is_empty() {
+fn build_search_query(
+    text: &str,
+    index: &tantivy::Index,
+    s: &LupaSchema,
+) -> Box<dyn tantivy::query::Query> {
+    let text = text.trim();
+    if text.is_empty() {
         return Box::new(BooleanQuery::new(vec![]));
     }
 
-    let mut subqueries: Vec<(Occur, Box<dyn TQuery>)> = Vec::new();
+    let normalized_text = text.replace('|', " OR ");
 
-    for term in &terms {
-        let distance = if term.len() <= 5 { 1u8 } else { 2u8 };
+    let mut parser = QueryParser::for_index(index, vec![s.title, s.title_terms, s.body, s.path]);
+    parser.set_conjunction_by_default();
+    parser.set_field_boost(s.title, 5.0);
+    parser.set_field_boost(s.title_terms, 4.0);
+    parser.set_field_boost(s.path, 1.5);
+    parser.set_field_boost(s.body, 1.0);
+    parser.set_field_fuzzy(s.title, false, 1, true);
+    parser.set_field_fuzzy(s.title_terms, false, 1, true);
+    parser.set_field_fuzzy(s.body, false, 1, true);
 
-        for field in [s.title, s.body, s.path] {
-            let fq = FuzzyTermQuery::new(Term::from_field_text(field, term), distance, true);
-            subqueries.push((Occur::Should, Box::new(fq)));
-        }
-    }
-
-    if subqueries.len() == 1 {
-        subqueries.pop().expect("single query").1
-    } else {
-        Box::new(BooleanQuery::new(subqueries))
-    }
+    parser.parse_query_lenient(&normalized_text).0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn create_index_with_docs(docs: &[Document]) -> (tempfile::TempDir, LupaIndex) {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let mut index = LupaIndex::create_or_open(path).unwrap();
+        let mut writer = index.writer(20_000_000).unwrap();
+
+        for doc in docs {
+            index.upsert(doc, &mut writer).unwrap();
+        }
+
+        index.commit(&mut writer).unwrap();
+        (tmp, index)
+    }
+
+    fn search(index: &LupaIndex, text: &str) -> Vec<Hit> {
+        index
+            .search(&Query {
+                text: text.to_string(),
+                limit: 10,
+            })
+            .unwrap()
+    }
 
     fn sample_document(id: &str, title: &str, body: &str) -> Document {
         Document {
@@ -321,26 +369,14 @@ mod tests {
 
     #[test]
     fn test_create_and_search() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().to_str().unwrap();
-
-        let mut index = LupaIndex::create_or_open(path).unwrap();
-        let mut writer = index.writer(20_000_000).unwrap();
         let doc = sample_document(
             "fs:/tmp/test.txt",
             "test.txt",
             "hello world this is test content",
         );
 
-        index.upsert(&doc, &mut writer).unwrap();
-        index.commit(&mut writer).unwrap();
-
-        let results = index
-            .search(&Query {
-                text: "hello".to_string(),
-                limit: 10,
-            })
-            .unwrap();
+        let (_tmp, index) = create_index_with_docs(&[doc]);
+        let results = search(&index, "hello");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "test.txt");
@@ -427,48 +463,34 @@ mod tests {
 
     #[test]
     fn test_multiple_documents_search() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().to_str().unwrap();
-
-        let mut index = LupaIndex::create_or_open(path).unwrap();
-        let mut writer = index.writer(20_000_000).unwrap();
-
-        for i in 0..5 {
-            let doc = sample_document(
-                &format!("fs:/tmp/doc{i}.txt"),
-                &format!("doc{i}.txt"),
-                &format!("content number {i}"),
-            );
-            index.upsert(&doc, &mut writer).unwrap();
-        }
-        index.commit(&mut writer).unwrap();
-
-        let results = index
-            .search(&Query {
-                text: "content".to_string(),
-                limit: 10,
+        let docs: Vec<_> = (0..5)
+            .map(|i| {
+                sample_document(
+                    &format!("fs:/tmp/doc{i}.txt"),
+                    &format!("doc{i}.txt"),
+                    &format!("content number {i}"),
+                )
             })
-            .unwrap();
+            .collect();
+
+        let (_tmp, index) = create_index_with_docs(&docs);
+        let results = search(&index, "content");
         assert_eq!(results.len(), 5);
     }
 
     #[test]
     fn test_search_limit() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().to_str().unwrap();
+        let docs: Vec<_> = (0..10)
+            .map(|i| {
+                sample_document(
+                    &format!("fs:/tmp/lim{i}.txt"),
+                    &format!("lim{i}.txt"),
+                    &format!("limit test {i}"),
+                )
+            })
+            .collect();
 
-        let mut index = LupaIndex::create_or_open(path).unwrap();
-        let mut writer = index.writer(20_000_000).unwrap();
-
-        for i in 0..10 {
-            let doc = sample_document(
-                &format!("fs:/tmp/lim{i}.txt"),
-                &format!("lim{i}.txt"),
-                &format!("limit test {i}"),
-            );
-            index.upsert(&doc, &mut writer).unwrap();
-        }
-        index.commit(&mut writer).unwrap();
+        let (_tmp, index) = create_index_with_docs(&docs);
 
         let results = index
             .search(&Query {
@@ -481,28 +503,123 @@ mod tests {
 
     #[test]
     fn test_upsert_and_search_round_trips_icon_and_kind() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().to_str().unwrap();
-
-        let mut index = LupaIndex::create_or_open(path).unwrap();
-        let mut writer = index.writer(20_000_000).unwrap();
         let mut doc = sample_document("fs:/tmp/roundtrip.pdf", "roundtrip.pdf", "pdf body");
         doc.icon_name = Some("application-pdf".into());
         doc.kind_label = Some("PDF Document".into());
 
-        index.upsert(&doc, &mut writer).unwrap();
-        index.commit(&mut writer).unwrap();
-
-        let results = index
-            .search(&Query {
-                text: "pdf".to_string(),
-                limit: 10,
-            })
-            .unwrap();
+        let (_tmp, index) = create_index_with_docs(&[doc]);
+        let results = search(&index, "pdf");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].icon_name.as_deref(), Some("application-pdf"));
         assert_eq!(results[0].kind_label.as_deref(), Some("PDF Document"));
+    }
+
+    #[test]
+    fn test_search_diacritic_insensitive() {
+        let (_tmp_resume, resume_index) =
+            create_index_with_docs(&[sample_document("fs:/tmp/resume1.txt", "résumé", "")]);
+        let resume_results = search(&resume_index, "resume");
+        assert_eq!(resume_results.len(), 1);
+
+        let (_tmp_accented, accented_index) =
+            create_index_with_docs(&[sample_document("fs:/tmp/resume2.txt", "resume", "")]);
+        let accented_results = search(&accented_index, "résumé");
+        assert_eq!(accented_results.len(), 1);
+    }
+
+    #[test]
+    fn test_search_case_insensitive() {
+        let (_tmp, index) =
+            create_index_with_docs(&[sample_document("fs:/tmp/firefox.txt", "Firefox", "")]);
+
+        assert_eq!(search(&index, "firefox").len(), 1);
+        assert_eq!(search(&index, "FIREFOX").len(), 1);
+    }
+
+    #[test]
+    fn test_search_camelcase_split() {
+        let (_tmp, index) =
+            create_index_with_docs(&[sample_document("fs:/tmp/my-file.txt", "MyFileName.txt", "")]);
+
+        assert_eq!(search(&index, "file").len(), 1);
+        assert_eq!(search(&index, "name").len(), 1);
+    }
+
+    #[test]
+    fn test_search_snake_case_split() {
+        let (_tmp, index) = create_index_with_docs(&[sample_document(
+            "fs:/tmp/report.pdf",
+            "my_report_final.pdf",
+            "",
+        )]);
+
+        assert_eq!(search(&index, "report").len(), 1);
+    }
+
+    #[test]
+    fn test_search_fuzzy_typo() {
+        let (_tmp, index) =
+            create_index_with_docs(&[sample_document("fs:/tmp/firefox.txt", "Firefox", "")]);
+
+        assert_eq!(search(&index, "firfox").len(), 1);
+        assert!(search(&index, "chrom").is_empty());
+    }
+
+    #[test]
+    fn test_search_and_default() {
+        let docs = vec![
+            sample_document("fs:/tmp/foo-bar.txt", "foo bar", ""),
+            sample_document("fs:/tmp/foo-baz.txt", "foo baz", ""),
+        ];
+        let (_tmp, index) = create_index_with_docs(&docs);
+
+        let both_terms = search(&index, "foo bar");
+        assert_eq!(both_terms[0].title, "foo bar");
+
+        let single_term = search(&index, "foo");
+        assert_eq!(single_term.len(), 2);
+    }
+
+    #[test]
+    fn test_search_not_operator() {
+        let docs = vec![
+            sample_document("fs:/tmp/report-2024.txt", "report 2024", ""),
+            sample_document("fs:/tmp/draft.txt", "draft report", ""),
+        ];
+        let (_tmp, index) = create_index_with_docs(&docs);
+
+        let results = search(&index, "report -draft");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "report 2024");
+    }
+
+    #[test]
+    fn test_search_or_operator() {
+        let docs = vec![
+            sample_document("fs:/tmp/foo.txt", "foo", ""),
+            sample_document("fs:/tmp/bar.txt", "bar", ""),
+        ];
+        let (_tmp, index) = create_index_with_docs(&docs);
+
+        let results = search(&index, "foo | bar");
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().any(|hit| hit.title == "foo"));
+        assert!(results.iter().any(|hit| hit.title == "bar"));
+    }
+
+    #[test]
+    fn test_title_boost_outranks_body() {
+        let docs = vec![
+            sample_document("fs:/tmp/title-urgent.txt", "urgent", "background"),
+            sample_document("fs:/tmp/body-urgent.txt", "background", "urgent"),
+        ];
+        let (_tmp, index) = create_index_with_docs(&docs);
+
+        let results = search(&index, "urgent");
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].id.0, "fs:/tmp/title-urgent.txt");
+        assert!(results[0].score > results[1].score);
     }
 
     #[test]
