@@ -8,8 +8,8 @@ Cargo.lock
 /packaging/arch/lupa-*.tar.gz
 /packaging/arch/releases/lupa-*/
 
-# local tooling agent workspace
-/.local/notes/
+# local tooling agent workspace (plans, notepads, transcripts — local only)
+/.local/
 
 # Local reference documents (PDFs, etc.) used for design research
 /docs/references/
