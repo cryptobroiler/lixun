@@ -1,5 +1,9 @@
 pub mod walk;
 
+mod factory;
+
+pub use factory::MaildirFactory;
+
 use anyhow::Result;
 use lupa_core::{
     Action, Category, DocId, Document, ExtraFieldValue, PluginFieldSpec, PluginFieldType,

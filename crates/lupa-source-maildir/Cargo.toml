@@ -12,6 +12,8 @@ lupa-core = { path = "../lupa-core" }
 lupa-sources = { path = "../lupa-sources" }
 anyhow.workspace = true
 mailparse = "0.15"
+serde.workspace = true
+toml = "0.8"
 tracing.workspace = true
 walkdir.workspace = true
 
