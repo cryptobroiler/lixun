@@ -1,10 +1,11 @@
 //! Lupa Index — Tantivy wrapper: schema, writer, searcher.
 
 pub mod calculator;
+pub mod plugin_schema;
 pub mod tokenizer;
 
 use anyhow::Result;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use tantivy::{
     collector::TopDocs,
@@ -17,11 +18,12 @@ use tantivy::{
     Index, IndexWriter, TantivyDocument,
 };
 
+pub use plugin_schema::CompiledPluginSchema;
 pub use tantivy::{IndexWriter as TantivyIndexWriter, TantivyDocument as TantivyDoc};
 
-use lupa_core::{Category, Document, Hit, Query};
+use lupa_core::{Category, Document, Hit, PluginFieldSpec, PluginFieldType, PluginValue, Query};
 
-const INDEX_VERSION: u32 = 4;
+const INDEX_VERSION: u32 = 5;
 const INDEX_VERSION_FILE: &str = "index_version.txt";
 
 /// Tantivy schema fields.
@@ -42,10 +44,18 @@ pub struct LupaSchema {
     pub extract_fail: tantivy::schema::Field,
     pub sender: tantivy::schema::Field,
     pub recipients: tantivy::schema::Field,
+    pub source_instance: tantivy::schema::Field,
 }
 
 impl LupaSchema {
     pub fn build() -> Self {
+        let (s, _) = Self::build_with_plugins(&BTreeMap::new()).expect("empty plugin map");
+        s
+    }
+
+    pub fn build_with_plugins(
+        plugin_fields_by_kind: &BTreeMap<&'static str, &'static [PluginFieldSpec]>,
+    ) -> Result<(Self, CompiledPluginSchema)> {
         let mut builder = tantivy::schema::Schema::builder();
         let spotlight_indexing = || {
             TextFieldIndexing::default()
@@ -75,27 +85,35 @@ impl LupaSchema {
         let extract_fail = builder.add_bool_field("extract_fail", STORED);
         let sender = builder.add_text_field("sender", stored_spotlight_text());
         let recipients = builder.add_text_field("recipients", stored_spotlight_text());
+        let source_instance = builder.add_text_field("source_instance", STRING | STORED);
+
+        let plugins =
+            plugin_schema::add_plugin_fields_to_schema(&mut builder, plugin_fields_by_kind)?;
 
         let schema = builder.build();
 
-        Self {
-            schema,
-            id,
-            category,
-            title,
-            title_terms,
-            subtitle,
-            icon_name,
-            kind_label,
-            body,
-            path,
-            mtime,
-            size,
-            action,
-            extract_fail,
-            sender,
-            recipients,
-        }
+        Ok((
+            Self {
+                schema,
+                id,
+                category,
+                title,
+                title_terms,
+                subtitle,
+                icon_name,
+                kind_label,
+                body,
+                path,
+                mtime,
+                size,
+                action,
+                extract_fail,
+                sender,
+                recipients,
+                source_instance,
+            },
+            plugins,
+        ))
     }
 }
 
@@ -103,21 +121,40 @@ impl LupaSchema {
 pub struct LupaIndex {
     index: Index,
     schema: LupaSchema,
+    plugins: CompiledPluginSchema,
 }
 
 impl LupaIndex {
     pub fn create_or_open(index_path: &str) -> Result<Self> {
-        let schema = LupaSchema::build();
+        Self::create_or_open_with_plugins(index_path, &BTreeMap::new())
+    }
+
+    pub fn create_or_open_with_plugins(
+        index_path: &str,
+        plugin_fields_by_kind: &BTreeMap<&'static str, &'static [PluginFieldSpec]>,
+    ) -> Result<Self> {
+        let (schema, plugins) = LupaSchema::build_with_plugins(plugin_fields_by_kind)?;
         let index_dir = PathBuf::from(index_path);
         let version_path = index_dir.join(INDEX_VERSION_FILE);
         let meta_path = index_dir.join("meta.json");
 
+        let fingerprint = plugin_schema::compute_fingerprint(INDEX_VERSION, plugin_fields_by_kind);
+        let on_disk_fp = plugin_schema::read_fingerprint(&index_dir);
         let version_matches = read_index_version(&version_path) == Some(INDEX_VERSION);
+        let fingerprint_matches = on_disk_fp.as_deref() == Some(fingerprint.as_str());
         let has_meta = meta_path.exists();
 
-        let index = if version_matches && has_meta {
+        let needs_rebuild = !version_matches || !fingerprint_matches || !has_meta;
+
+        let index = if !needs_rebuild {
             Index::open_in_dir(index_path)?
         } else {
+            if index_dir.exists() && !fingerprint_matches && version_matches {
+                tracing::info!(
+                    path = %index_dir.display(),
+                    "Schema fingerprint changed; wiping and rebuilding index"
+                );
+            }
             recreate_index_dir(&index_dir, read_index_version_string(&version_path))?;
             let dir = MmapDirectory::open(index_path)?;
             let index = Index::create(
@@ -126,12 +163,17 @@ impl LupaIndex {
                 tantivy::IndexSettings::default(),
             )?;
             std::fs::write(&version_path, INDEX_VERSION.to_string())?;
+            plugin_schema::write_fingerprint(&index_dir, &fingerprint)?;
             index
         };
 
         tokenizer::register_spotlight_tokenizer(&index);
 
-        Ok(Self { index, schema })
+        Ok(Self {
+            index,
+            schema,
+            plugins,
+        })
     }
 
     /// Upsert a document (delete by id, then insert).
@@ -148,7 +190,7 @@ impl LupaIndex {
         let action_json = serde_json::to_string(&doc.action)?;
         let title_split = tokenizer::split_identifiers(&doc.title);
 
-        writer.add_document(doc![
+        let mut tdoc = doc![
             s.id => doc.id.0.as_str(),
             s.category => doc.category.as_str(),
             s.title => doc.title.as_str(),
@@ -164,8 +206,45 @@ impl LupaIndex {
             s.extract_fail => doc.extract_fail,
             s.sender => doc.sender.as_deref().unwrap_or(""),
             s.recipients => doc.recipients.as_deref().unwrap_or(""),
-        ])?;
+            s.source_instance => doc.source_instance.as_str(),
+        ];
 
+        for extra in &doc.extra {
+            let Some(cf) = self.plugins.extras.get(extra.field) else {
+                anyhow::bail!(
+                    "Document carries extra field '{}' not registered by any enabled plugin",
+                    extra.field
+                );
+            };
+            match (&cf.spec.ty, &extra.value) {
+                (PluginFieldType::Text { .. }, PluginValue::Text(v))
+                | (PluginFieldType::Keyword, PluginValue::Text(v)) => {
+                    tdoc.add_text(cf.field, v);
+                }
+                (PluginFieldType::I64, PluginValue::I64(v)) => tdoc.add_i64(cf.field, *v),
+                (PluginFieldType::U64, PluginValue::U64(v)) => tdoc.add_u64(cf.field, *v),
+                (PluginFieldType::Bool, PluginValue::Bool(v)) => tdoc.add_bool(cf.field, *v),
+                _ => anyhow::bail!(
+                    "Type mismatch for plugin field '{}': spec={:?}, value={:?}",
+                    extra.field,
+                    cf.spec.ty,
+                    extra.value
+                ),
+            }
+        }
+
+        writer.add_document(tdoc)?;
+
+        Ok(())
+    }
+
+    pub fn delete_by_source_instance(
+        &mut self,
+        instance_id: &str,
+        writer: &mut IndexWriter<TantivyDocument>,
+    ) -> Result<()> {
+        let term = tantivy::Term::from_field_text(self.schema.source_instance, instance_id);
+        writer.delete_term(term);
         Ok(())
     }
 
@@ -186,7 +265,7 @@ impl LupaIndex {
         let searcher = reader.searcher();
         let s = &self.schema;
 
-        let query_obj = build_search_query(&query.text, &self.index, s);
+        let query_obj = build_search_query(&query.text, &self.index, s, &self.plugins);
         let top_docs = searcher.search(&query_obj, &TopDocs::with_limit(query.limit as usize))?;
 
         let mut results = Vec::new();
@@ -335,25 +414,29 @@ fn build_search_query(
     text: &str,
     index: &tantivy::Index,
     s: &LupaSchema,
+    plugins: &CompiledPluginSchema,
 ) -> Box<dyn tantivy::query::Query> {
     let text = text.trim();
     if text.is_empty() {
         return Box::new(BooleanQuery::new(vec![]));
     }
 
-    let normalized_text = text.replace('|', " OR ");
+    let aliased = plugin_schema::rewrite_query_aliases(text, &plugins.query_aliases);
+    let normalized_text = aliased.replace('|', " OR ");
 
-    let mut parser = QueryParser::for_index(
-        index,
-        vec![
-            s.title,
-            s.title_terms,
-            s.body,
-            s.path,
-            s.sender,
-            s.recipients,
-        ],
-    );
+    let mut default_fields: Vec<tantivy::schema::Field> = vec![
+        s.title,
+        s.title_terms,
+        s.body,
+        s.path,
+        s.sender,
+        s.recipients,
+    ];
+    for (field, _boost) in &plugins.default_query_fields {
+        default_fields.push(*field);
+    }
+
+    let mut parser = QueryParser::for_index(index, default_fields);
     parser.set_conjunction_by_default();
     parser.set_field_boost(s.title, 5.0);
     parser.set_field_boost(s.title_terms, 4.0);
@@ -366,6 +449,10 @@ fn build_search_query(
     parser.set_field_fuzzy(s.body, false, 1, true);
     parser.set_field_fuzzy(s.sender, false, 1, true);
     parser.set_field_fuzzy(s.recipients, false, 1, true);
+
+    for (field, boost) in &plugins.default_query_fields {
+        parser.set_field_boost(*field, *boost);
+    }
 
     parser.parse_query_lenient(&normalized_text).0
 }
