@@ -15,6 +15,7 @@ struct ConfigToml {
     keybindings: Option<KeybindingsToml>,
     #[serde(default)]
     maildir: Vec<MaildirSourceToml>,
+    thunderbird: Option<ThunderbirdToml>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -25,6 +26,16 @@ struct MaildirSourceToml {
     paths: Vec<String>,
     #[serde(default)]
     open_cmd: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThunderbirdToml {
+    #[serde(default = "default_true")]
+    enabled: bool,
+    profile: Option<String>,
+    gloda_batch_size: Option<u32>,
+    #[serde(default = "default_true")]
+    attachments: bool,
 }
 
 fn default_true() -> bool {
@@ -86,6 +97,25 @@ pub struct MaildirConfig {
     pub open_cmd: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ThunderbirdConfig {
+    pub enabled: bool,
+    pub profile_override: Option<PathBuf>,
+    pub gloda_batch_size: u32,
+    pub attachments: bool,
+}
+
+impl Default for ThunderbirdConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            profile_override: None,
+            gloda_batch_size: 250,
+            attachments: true,
+        }
+    }
+}
+
 pub struct Config {
     pub roots: Vec<PathBuf>,
     pub exclude: Vec<String>,
@@ -99,6 +129,7 @@ pub struct Config {
     pub keybindings: Keybindings,
     pub state_dir: PathBuf,
     pub maildir: Vec<MaildirConfig>,
+    pub thunderbird: ThunderbirdConfig,
 }
 
 impl Default for Config {
@@ -117,6 +148,7 @@ impl Default for Config {
             keybindings: Keybindings::default(),
             state_dir: state_dir(),
             maildir: Vec::new(),
+            thunderbird: ThunderbirdConfig::default(),
         }
     }
 }
@@ -288,6 +320,21 @@ impl Config {
                     "config: duplicate maildir source id '{}'; each [[maildir]] entry must have a unique id",
                     md.id
                 );
+            }
+        }
+
+        if let Some(tb) = parsed.thunderbird {
+            cfg.thunderbird.enabled = tb.enabled;
+            cfg.thunderbird.attachments = tb.attachments;
+            if let Some(batch) = tb.gloda_batch_size {
+                if batch == 0 {
+                    anyhow::bail!("config: [thunderbird] gloda_batch_size must be > 0 (got 0)");
+                }
+                cfg.thunderbird.gloda_batch_size = batch;
+            }
+            if let Some(profile) = tb.profile {
+                let path = expand_tilde(&profile);
+                cfg.thunderbird.profile_override = Some(path);
             }
         }
 

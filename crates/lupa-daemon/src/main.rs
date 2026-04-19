@@ -622,24 +622,46 @@ fn register_builtin_sources(
         Arc::new(lupa_sources::apps::AppsSource::new()),
     );
 
-    if let Some(profile) = lupa_source_thunderbird::find_profile() {
-        registry.register(
-            "builtin:gloda".into(),
-            state_dir_root,
-            Arc::new(lupa_source_thunderbird::GlodaSource::new(
-                profile.clone(),
-                0,
-                250,
-            )),
-        );
-        registry.register(
-            "builtin:tb_attachments".into(),
-            state_dir_root,
-            Arc::new(lupa_source_thunderbird::ThunderbirdAttachmentsSource::new(
-                profile,
-                config.max_file_size_mb * 1024 * 1024,
-            )),
-        );
+    if config.thunderbird.enabled {
+        let profile = config
+            .thunderbird
+            .profile_override
+            .clone()
+            .or_else(lupa_source_thunderbird::find_profile);
+        if let Some(profile) = profile {
+            if !profile.exists() {
+                tracing::warn!(
+                    "thunderbird: configured profile {:?} does not exist; skipping gloda + attachments",
+                    profile
+                );
+            } else {
+                registry.register(
+                    "builtin:gloda".into(),
+                    state_dir_root,
+                    Arc::new(lupa_source_thunderbird::GlodaSource::new(
+                        profile.clone(),
+                        0,
+                        config.thunderbird.gloda_batch_size,
+                    )),
+                );
+                if config.thunderbird.attachments {
+                    registry.register(
+                        "builtin:tb_attachments".into(),
+                        state_dir_root,
+                        Arc::new(lupa_source_thunderbird::ThunderbirdAttachmentsSource::new(
+                            profile,
+                            config.max_file_size_mb * 1024 * 1024,
+                        )),
+                    );
+                } else {
+                    tracing::info!(
+                        "thunderbird: attachments disabled by config; registering gloda only"
+                    );
+                }
+            }
+        }
+    } else {
+        tracing::info!("thunderbird: disabled by config; skipping gloda + attachments");
     }
 
     let fs = lupa_sources::fs::FsSource::with_regex(

@@ -1,4 +1,4 @@
-use lupa_daemon::config::{Config, Keybindings};
+use lupa_daemon::config::{Config, Keybindings, ThunderbirdConfig};
 use lupa_daemon::index_service::spawn_writer_service;
 use lupa_daemon::indexer;
 use lupa_sources::manifest::Manifest;
@@ -17,6 +17,7 @@ fn test_config(root: std::path::PathBuf, state_dir: std::path::PathBuf) -> Confi
         keybindings: Keybindings::default(),
         state_dir,
         maildir: Vec::new(),
+        thunderbird: ThunderbirdConfig::default(),
     }
 }
 

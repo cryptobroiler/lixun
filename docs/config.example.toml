@@ -282,3 +282,30 @@ global_toggle = "Super+space"
 # enabled = true
 # paths = ["~/.local/share/mail/work"]
 # open_cmd = ["aerc", "mailto:{message_id}"]
+
+# ─── Thunderbird source (optional) ────────────────────────────────────
+#
+# When present and ~/.thunderbird/ exists, Lupa auto-registers two source
+# instances: builtin:gloda (SQLite messages: subject, sender, recipients,
+# body snippet) and builtin:tb_attachments (mbox-level attachment text).
+# Omit this whole section to keep the default behavior (auto-detect,
+# both enabled, batch=250). Adding or changing this section does NOT
+# trigger a schema wipe — all four settings are runtime-only.
+#
+# [thunderbird]
+# enabled = true
+#
+# # Override auto-detection (useful if you have multiple profiles and
+# # the default one isn't what you want Lupa to index). Must be the
+# # full profile dir containing global-messages-db.sqlite and Mail/.
+# # profile = "~/.thunderbird/work.default-release"
+#
+# # How many gloda messages to ingest per 30s tick. Default 250.
+# # Raise to ~1000 on very large mailboxes if initial catch-up is slow;
+# # lower if you want to cap per-tick I/O more aggressively.
+# # gloda_batch_size = 250
+#
+# # Index mbox attachment content (PDFs, docs inside .eml). Disable if
+# # your mailbox is huge and search across attachment bodies isn't worth
+# # the disk I/O; gloda message search continues to work either way.
+# # attachments = true

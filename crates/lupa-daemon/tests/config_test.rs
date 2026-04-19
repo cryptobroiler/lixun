@@ -93,3 +93,84 @@ fn missing_exclude_sections_leave_defaults_intact() {
     assert!(cfg.exclude_regex.is_empty());
     assert_eq!(cfg.max_file_size_mb, 25);
 }
+
+#[test]
+fn thunderbird_section_absent_uses_defaults() {
+    let cfg = Config::from_toml_str("").unwrap();
+    assert!(cfg.thunderbird.enabled);
+    assert!(cfg.thunderbird.attachments);
+    assert_eq!(cfg.thunderbird.gloda_batch_size, 250);
+    assert!(cfg.thunderbird.profile_override.is_none());
+}
+
+#[test]
+fn thunderbird_disabled_flag_propagates() {
+    let cfg = Config::from_toml_str(
+        r#"
+        [thunderbird]
+        enabled = false
+    "#,
+    )
+    .unwrap();
+    assert!(!cfg.thunderbird.enabled);
+    assert!(cfg.thunderbird.attachments);
+}
+
+#[test]
+fn thunderbird_attachments_can_be_disabled_independently() {
+    let cfg = Config::from_toml_str(
+        r#"
+        [thunderbird]
+        attachments = false
+    "#,
+    )
+    .unwrap();
+    assert!(cfg.thunderbird.enabled);
+    assert!(!cfg.thunderbird.attachments);
+}
+
+#[test]
+fn thunderbird_custom_batch_size_and_profile() {
+    let cfg = Config::from_toml_str(
+        r#"
+        [thunderbird]
+        gloda_batch_size = 1000
+        profile = "~/.thunderbird/work.default-release"
+    "#,
+    )
+    .unwrap();
+    assert_eq!(cfg.thunderbird.gloda_batch_size, 1000);
+    let profile = cfg.thunderbird.profile_override.expect("profile set");
+    assert!(
+        profile.to_string_lossy().ends_with("work.default-release"),
+        "profile override stored: {:?}",
+        profile
+    );
+    let home = std::env::var("HOME").unwrap_or_default();
+    if !home.is_empty() {
+        assert!(
+            profile.starts_with(&home),
+            "tilde must expand: {:?}",
+            profile
+        );
+    }
+}
+
+#[test]
+fn thunderbird_zero_batch_size_rejected() {
+    let result = Config::from_toml_str(
+        r#"
+        [thunderbird]
+        gloda_batch_size = 0
+    "#,
+    );
+    let err = match result {
+        Ok(_) => panic!("expected error for gloda_batch_size = 0"),
+        Err(e) => e,
+    };
+    assert!(
+        err.to_string().contains("gloda_batch_size"),
+        "error message mentions field: {}",
+        err
+    );
+}
