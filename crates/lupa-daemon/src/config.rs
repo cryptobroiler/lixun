@@ -8,6 +8,7 @@ use std::path::PathBuf;
 struct ConfigToml {
     roots: Option<Vec<String>>,
     exclude: Option<Vec<String>>,
+    exclude_regex: Option<Vec<String>>,
     max_file_size_mb: Option<u64>,
     extractor_timeout_secs: Option<u64>,
     ranking: Option<RankingToml>,
@@ -65,6 +66,7 @@ pub struct Keybindings {
 pub struct Config {
     pub roots: Vec<PathBuf>,
     pub exclude: Vec<String>,
+    pub exclude_regex: Vec<regex::Regex>,
     pub max_file_size_mb: u64,
     pub extractor_timeout_secs: u64,
     pub ranking_apps: f32,
@@ -80,21 +82,8 @@ impl Default for Config {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home".into());
         Self {
             roots: vec![PathBuf::from(&home)],
-            exclude: vec![
-                ".cache".into(),
-                ".local/share/Trash".into(),
-                ".steam".into(),
-                ".var/app".into(),
-                "node_modules".into(),
-                "target".into(),
-                ".git".into(),
-                ".venv".into(),
-                "__pycache__".into(),
-                ".thunderbird".into(),
-                ".swp".into(),
-                ".swo".into(),
-                ".swx".into(),
-            ],
+            exclude: default_excludes(),
+            exclude_regex: Vec::new(),
             max_file_size_mb: 50,
             extractor_timeout_secs: 15,
             ranking_apps: 1.3,
@@ -105,6 +94,24 @@ impl Default for Config {
             state_dir: state_dir(),
         }
     }
+}
+
+fn default_excludes() -> Vec<String> {
+    vec![
+        ".cache".into(),
+        ".local/share/Trash".into(),
+        ".steam".into(),
+        ".var/app".into(),
+        "node_modules".into(),
+        "target".into(),
+        ".git".into(),
+        ".venv".into(),
+        "__pycache__".into(),
+        ".thunderbird".into(),
+        ".swp".into(),
+        ".swo".into(),
+        ".swx".into(),
+    ]
 }
 
 impl Default for Keybindings {
@@ -133,87 +140,101 @@ impl Default for Keybindings {
 impl Config {
     pub fn load() -> Result<Self> {
         let config_path = config_dir().join("lupa/config.toml");
+        if !config_path.exists() {
+            return Ok(Self::default());
+        }
+        let content = std::fs::read_to_string(&config_path)?;
+        Self::from_toml_str(&content)
+    }
+
+    pub fn from_toml_str(content: &str) -> Result<Self> {
         let mut cfg = Self::default();
+        let parsed: ConfigToml = toml::from_str(content)?;
 
-        if config_path.exists() {
-            let content = std::fs::read_to_string(&config_path)?;
-            let parsed: ConfigToml = toml::from_str(&content)?;
-
-            if let Some(roots) = parsed.roots {
-                cfg.roots = roots.iter().map(|s| expand_tilde(s)).collect();
-            }
-            if let Some(exclude) = parsed.exclude {
-                cfg.exclude = exclude;
-            }
-            if let Some(max) = parsed.max_file_size_mb {
-                cfg.max_file_size_mb = max;
-            }
-            if let Some(timeout) = parsed.extractor_timeout_secs {
-                cfg.extractor_timeout_secs = timeout;
-            }
-            if let Some(ranking) = parsed.ranking {
-                if let Some(v) = ranking.apps {
-                    cfg.ranking_apps = v;
-                }
-                if let Some(v) = ranking.files {
-                    cfg.ranking_files = v;
-                }
-                if let Some(v) = ranking.mail {
-                    cfg.ranking_mail = v;
-                }
-                if let Some(v) = ranking.attachments {
-                    cfg.ranking_attachments = v;
+        if let Some(roots) = parsed.roots {
+            cfg.roots = roots.iter().map(|s| expand_tilde(s)).collect();
+        }
+        if let Some(extra) = parsed.exclude {
+            cfg.exclude.extend(extra);
+        }
+        if let Some(patterns) = parsed.exclude_regex {
+            for pat in patterns {
+                match regex::Regex::new(&pat) {
+                    Ok(r) => cfg.exclude_regex.push(r),
+                    Err(e) => {
+                        tracing::error!("config: skipping invalid exclude_regex '{}': {}", pat, e)
+                    }
                 }
             }
-            if let Some(bindings) = parsed.keybindings {
-                if let Some(v) = bindings.close {
-                    cfg.keybindings.close = v;
-                }
-                if let Some(v) = bindings.primary_action {
-                    cfg.keybindings.primary_action = v;
-                }
-                if let Some(v) = bindings.secondary_action {
-                    cfg.keybindings.secondary_action = v;
-                }
-                if let Some(v) = bindings.copy {
-                    cfg.keybindings.copy = v;
-                }
-                if let Some(v) = bindings.quick_look {
-                    cfg.keybindings.quick_look = v;
-                }
-                if let Some(v) = bindings.history_up {
-                    cfg.keybindings.history_up = v;
-                }
-                if let Some(v) = bindings.next_result {
-                    cfg.keybindings.next_result = v;
-                }
-                if let Some(v) = bindings.previous_result {
-                    cfg.keybindings.previous_result = v;
-                }
-                if let Some(v) = bindings.next_category {
-                    cfg.keybindings.next_category = v;
-                }
-                if let Some(v) = bindings.previous_category {
-                    cfg.keybindings.previous_category = v;
-                }
-                if let Some(v) = bindings.filter_all {
-                    cfg.keybindings.filter_all = v;
-                }
-                if let Some(v) = bindings.filter_apps {
-                    cfg.keybindings.filter_apps = v;
-                }
-                if let Some(v) = bindings.filter_files {
-                    cfg.keybindings.filter_files = v;
-                }
-                if let Some(v) = bindings.filter_mail {
-                    cfg.keybindings.filter_mail = v;
-                }
-                if let Some(v) = bindings.filter_attachments {
-                    cfg.keybindings.filter_attachments = v;
-                }
-                if let Some(v) = bindings.global_toggle {
-                    cfg.keybindings.global_toggle = v;
-                }
+        }
+        if let Some(max) = parsed.max_file_size_mb {
+            cfg.max_file_size_mb = max;
+        }
+        if let Some(timeout) = parsed.extractor_timeout_secs {
+            cfg.extractor_timeout_secs = timeout;
+        }
+        if let Some(ranking) = parsed.ranking {
+            if let Some(v) = ranking.apps {
+                cfg.ranking_apps = v;
+            }
+            if let Some(v) = ranking.files {
+                cfg.ranking_files = v;
+            }
+            if let Some(v) = ranking.mail {
+                cfg.ranking_mail = v;
+            }
+            if let Some(v) = ranking.attachments {
+                cfg.ranking_attachments = v;
+            }
+        }
+        if let Some(bindings) = parsed.keybindings {
+            if let Some(v) = bindings.close {
+                cfg.keybindings.close = v;
+            }
+            if let Some(v) = bindings.primary_action {
+                cfg.keybindings.primary_action = v;
+            }
+            if let Some(v) = bindings.secondary_action {
+                cfg.keybindings.secondary_action = v;
+            }
+            if let Some(v) = bindings.copy {
+                cfg.keybindings.copy = v;
+            }
+            if let Some(v) = bindings.quick_look {
+                cfg.keybindings.quick_look = v;
+            }
+            if let Some(v) = bindings.history_up {
+                cfg.keybindings.history_up = v;
+            }
+            if let Some(v) = bindings.next_result {
+                cfg.keybindings.next_result = v;
+            }
+            if let Some(v) = bindings.previous_result {
+                cfg.keybindings.previous_result = v;
+            }
+            if let Some(v) = bindings.next_category {
+                cfg.keybindings.next_category = v;
+            }
+            if let Some(v) = bindings.previous_category {
+                cfg.keybindings.previous_category = v;
+            }
+            if let Some(v) = bindings.filter_all {
+                cfg.keybindings.filter_all = v;
+            }
+            if let Some(v) = bindings.filter_apps {
+                cfg.keybindings.filter_apps = v;
+            }
+            if let Some(v) = bindings.filter_files {
+                cfg.keybindings.filter_files = v;
+            }
+            if let Some(v) = bindings.filter_mail {
+                cfg.keybindings.filter_mail = v;
+            }
+            if let Some(v) = bindings.filter_attachments {
+                cfg.keybindings.filter_attachments = v;
+            }
+            if let Some(v) = bindings.global_toggle {
+                cfg.keybindings.global_toggle = v;
             }
         }
 
@@ -221,9 +242,10 @@ impl Config {
     }
 
     pub fn build_fs_source(&self) -> Result<lupa_sources::fs::FsSource> {
-        Ok(lupa_sources::fs::FsSource::new(
+        Ok(lupa_sources::fs::FsSource::with_regex(
             self.roots.clone(),
             self.exclude.clone(),
+            self.exclude_regex.clone(),
             self.max_file_size_mb,
         ))
     }

@@ -13,6 +13,7 @@
 
 use lupa_daemon::index_service::{IndexMutationTx, Mutation, fs_doc_id, index_file};
 use anyhow::Result;
+use lupa_sources::exclude::path_excluded;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,6 +22,17 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use walkdir::WalkDir;
+
+struct ExcludeSet {
+    subs: Vec<String>,
+    regexes: Vec<regex::Regex>,
+}
+
+impl ExcludeSet {
+    fn matches(&self, path: &Path) -> bool {
+        path_excluded(path, &self.subs, &self.regexes)
+    }
+}
 
 const COALESCE_FLUSH_INTERVAL: Duration = Duration::from_secs(3);
 const RESOLVER_WORKERS: usize = 2;
@@ -60,6 +72,7 @@ pub fn stats() -> (u64, u64, u64, u64) {
 pub async fn start(
     roots: Vec<PathBuf>,
     exclude: Vec<String>,
+    exclude_regex: Vec<regex::Regex>,
     max_file_size_mb: u64,
     mutation_tx: IndexMutationTx,
 ) -> Result<()> {
@@ -67,7 +80,10 @@ pub async fn start(
     let (ctrl_tx, ctrl_rx) = std::sync::mpsc::sync_channel::<Control>(CONTROL_QUEUE_CAP);
     let (refresh_tx, refresh_rx) = async_channel::bounded::<RefreshJob>(REFRESH_QUEUE_CAP);
 
-    let exclude_arc: Arc<Vec<String>> = Arc::new(exclude);
+    let exclude_arc: Arc<ExcludeSet> = Arc::new(ExcludeSet {
+        subs: exclude,
+        regexes: exclude_regex,
+    });
 
     let nt_roots = roots.clone();
     let nt_exclude = Arc::clone(&exclude_arc);
@@ -103,7 +119,7 @@ pub async fn start(
 
 fn notify_thread_main(
     roots: Vec<PathBuf>,
-    exclude: Arc<Vec<String>>,
+    exclude: Arc<ExcludeSet>,
     raw_tx: mpsc::Sender<RawEvent>,
     ctrl_rx: std::sync::mpsc::Receiver<Control>,
 ) {
@@ -138,7 +154,7 @@ fn notify_thread_main(
     loop {
         match ctrl_rx.recv_timeout(Duration::from_secs(1)) {
             Ok(Control::AddWatch(path)) => {
-                if path_excluded(&path, &exclude) {
+                if exclude.matches(&path) {
                     DIRS_EXCLUDED.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
@@ -167,7 +183,7 @@ fn notify_thread_main(
 fn initial_crawl(
     watcher: &mut RecommendedWatcher,
     roots: &[PathBuf],
-    exclude: &[String],
+    exclude: &ExcludeSet,
 ) -> (usize, usize, usize) {
     let mut watched = 0usize;
     let mut excluded = 0usize;
@@ -178,7 +194,7 @@ fn initial_crawl(
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| {
-                if path_excluded(e.path(), exclude) {
+                if exclude.matches(e.path()) {
                     excluded += 1;
                     return false;
                 }
@@ -248,7 +264,7 @@ enum Intent {
 async fn coalescer_task(
     mut raw_rx: mpsc::Receiver<RawEvent>,
     refresh_tx: async_channel::Sender<RefreshJob>,
-    exclude: Arc<Vec<String>>,
+    exclude: Arc<ExcludeSet>,
 ) {
     let mut pending: HashMap<PathBuf, Intent> = HashMap::new();
     let mut flush_tick = tokio::time::interval(COALESCE_FLUSH_INTERVAL);
@@ -262,7 +278,7 @@ async fn coalescer_task(
                 let Some(ev) = maybe_ev else { break };
                 match ev {
                     RawEvent::Upsert(p) => {
-                        if !path_excluded(&p, &exclude) {
+                        if !exclude.matches(&p) {
                             pending.insert(p, Intent::Refresh);
                         }
                     }
@@ -306,7 +322,7 @@ async fn resolver_task(
     mutation_tx: IndexMutationTx,
     ctrl_tx: std::sync::mpsc::SyncSender<Control>,
     refresh_tx: async_channel::Sender<RefreshJob>,
-    exclude: Arc<Vec<String>>,
+    exclude: Arc<ExcludeSet>,
     max_file_size_mb: u64,
 ) {
     while let Ok(job) = rx.recv().await {
@@ -378,11 +394,11 @@ enum Resolved {
     Skip,
 }
 
-fn resolve_refresh(path: &Path, exclude: &[String], max_file_size_mb: u64) -> Resolved {
+fn resolve_refresh(path: &Path, exclude: &ExcludeSet, max_file_size_mb: u64) -> Resolved {
     let Ok(meta) = std::fs::metadata(path) else {
         return Resolved::Gone;
     };
-    if path_excluded(path, exclude) {
+    if exclude.matches(path) {
         return Resolved::Skip;
     }
     if meta.is_file() {
@@ -396,7 +412,7 @@ fn resolve_refresh(path: &Path, exclude: &[String], max_file_size_mb: u64) -> Re
         for entry in WalkDir::new(path)
             .follow_links(false)
             .into_iter()
-            .filter_entry(|e| !path_excluded(e.path(), exclude))
+            .filter_entry(|e| !exclude.matches(e.path()))
             .flatten()
         {
             if entry.file_type().is_dir() {
@@ -411,35 +427,5 @@ fn resolve_refresh(path: &Path, exclude: &[String], max_file_size_mb: u64) -> Re
         }
     } else {
         Resolved::Skip
-    }
-}
-
-fn path_excluded(path: &Path, exclude: &[String]) -> bool {
-    let s = path.to_string_lossy();
-    for pat in exclude {
-        if s.contains(pat.as_str()) {
-            return true;
-        }
-    }
-    false
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn excluded_matches_substring() {
-        let ex: Vec<String> = vec![".cache".into(), "node_modules".into(), ".swp".into()];
-        assert!(path_excluded(Path::new("/home/u/.cache/x"), &ex));
-        assert!(path_excluded(Path::new("/home/u/p/node_modules/a"), &ex));
-        assert!(path_excluded(Path::new("/home/u/tmp/.file.swp"), &ex));
-        assert!(!path_excluded(Path::new("/home/u/tmp/file.txt"), &ex));
-    }
-
-    #[test]
-    fn excluded_empty_list() {
-        let ex: Vec<String> = vec![];
-        assert!(!path_excluded(Path::new("/any/path"), &ex));
     }
 }

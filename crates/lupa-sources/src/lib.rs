@@ -1,6 +1,7 @@
 //! Lupa Sources — data source trait + implementations.
 
 pub mod apps;
+pub mod exclude;
 pub mod fs;
 pub mod gloda;
 pub mod manifest;

@@ -147,6 +147,7 @@ async fn main() -> Result<()> {
     let state_dir = config.state_dir.clone();
     let watcher_roots = config.roots.clone();
     let watcher_exclude = config.exclude.clone();
+    let watcher_exclude_regex = config.exclude_regex.clone();
     let watcher_max_size = config.max_file_size_mb;
     let shared_config = Arc::new(config);
 
@@ -196,6 +197,7 @@ async fn main() -> Result<()> {
         if let Err(e) = watcher::start(
             watcher_roots,
             watcher_exclude,
+            watcher_exclude_regex,
             watcher_max_size,
             watcher_mutation,
         )

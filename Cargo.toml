@@ -49,4 +49,7 @@ bytes = "1.0"
 rayon = "1.10"
 num_cpus = "1.16"
 
+# Text
+regex = "1"
+
 tempfile = "3"

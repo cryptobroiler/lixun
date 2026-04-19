@@ -7,6 +7,7 @@ fn test_config(root: std::path::PathBuf, state_dir: std::path::PathBuf) -> Confi
     Config {
         roots: vec![root],
         exclude: Vec::new(),
+        exclude_regex: Vec::new(),
         max_file_size_mb: 1,
         extractor_timeout_secs: 1,
         ranking_apps: 1.0,

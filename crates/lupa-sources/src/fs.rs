@@ -17,6 +17,7 @@ use crate::mime_icons;
 pub struct FsSource {
     pub roots: Vec<PathBuf>,
     pub exclude: Vec<String>,
+    pub exclude_regex: Vec<regex::Regex>,
     pub max_file_size_mb: u64,
 }
 
@@ -34,12 +35,27 @@ impl FsSource {
         Self {
             roots,
             exclude,
+            exclude_regex: Vec::new(),
             max_file_size_mb,
         }
     }
 
-    fn should_exclude(&self, name: &str) -> bool {
-        self.exclude.iter().any(|pat| name == pat.as_str())
+    pub fn with_regex(
+        roots: Vec<PathBuf>,
+        exclude: Vec<String>,
+        exclude_regex: Vec<regex::Regex>,
+        max_file_size_mb: u64,
+    ) -> Self {
+        Self {
+            roots,
+            exclude,
+            exclude_regex,
+            max_file_size_mb,
+        }
+    }
+
+    fn is_excluded(&self, path: &Path) -> bool {
+        crate::exclude::path_excluded(path, &self.exclude, &self.exclude_regex)
     }
 
     /// Extract content from a file. Public for the watcher to reuse.
@@ -123,7 +139,7 @@ impl FsSource {
         for root in &self.roots {
             for entry in walkdir::WalkDir::new(root)
                 .into_iter()
-                .filter_entry(|e| !self.should_exclude(e.file_name().to_string_lossy().as_ref()))
+                .filter_entry(|e| !self.is_excluded(e.path()))
                 .filter_map(|e| e.ok())
             {
                 if !entry.file_type().is_file() {
@@ -269,7 +285,7 @@ impl crate::Source for FsSource {
         for root in &self.roots {
             for entry in walkdir::WalkDir::new(root)
                 .into_iter()
-                .filter_entry(|e| !self.should_exclude(e.file_name().to_string_lossy().as_ref()))
+                .filter_entry(|e| !self.is_excluded(e.path()))
                 .filter_map(|e| e.ok())
             {
                 if !entry.file_type().is_file() {
