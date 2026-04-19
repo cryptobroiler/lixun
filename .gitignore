@@ -11,3 +11,6 @@ Cargo.lock
 # local tooling agent workspace
 /.local/notes/
 
+# Local reference documents (PDFs, etc.) used for design research
+/docs/references/
+
