@@ -14,6 +14,21 @@ use lupa_core::Hit;
 
 pub const PROTOCOL_VERSION: u16 = 2;
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WatcherStats {
+    pub directories: u64,
+    pub excluded: u64,
+    pub errors: u64,
+    pub overflow_events: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WriterStats {
+    pub commits: u64,
+    pub last_commit_latency_ms: u32,
+    pub generation: u64,
+}
+
 /// The oldest protocol version this build can negotiate with.
 pub const MIN_PROTOCOL_VERSION: u16 = 1;
 
@@ -42,6 +57,10 @@ pub enum Response {
         indexed_docs: u64,
         last_reindex: Option<DateTime<Utc>>,
         errors: u32,
+        #[serde(default)]
+        watcher: Option<WatcherStats>,
+        #[serde(default)]
+        writer: Option<WriterStats>,
     },
     Visibility {
         visible: bool,

@@ -44,10 +44,17 @@ enum RefreshJob {
 
 static OVERFLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 static OVERFLOW_FLAG: AtomicBool = AtomicBool::new(false);
+static DIRS_WATCHED: AtomicUsize = AtomicUsize::new(0);
+static DIRS_EXCLUDED: AtomicUsize = AtomicUsize::new(0);
+static DIRS_ERRORS: AtomicUsize = AtomicUsize::new(0);
 
-#[allow(dead_code)]
-pub fn overflow_count() -> usize {
-    OVERFLOW_COUNT.load(Ordering::Relaxed)
+pub fn stats() -> (u64, u64, u64, u64) {
+    (
+        DIRS_WATCHED.load(Ordering::Relaxed) as u64,
+        DIRS_EXCLUDED.load(Ordering::Relaxed) as u64,
+        DIRS_ERRORS.load(Ordering::Relaxed) as u64,
+        OVERFLOW_COUNT.load(Ordering::Relaxed) as u64,
+    )
 }
 
 pub async fn start(
@@ -117,6 +124,9 @@ fn notify_thread_main(
     };
 
     let (watched, excluded, errors) = initial_crawl(&mut watcher, &roots, &exclude);
+    DIRS_WATCHED.store(watched, Ordering::Relaxed);
+    DIRS_EXCLUDED.store(excluded, Ordering::Relaxed);
+    DIRS_ERRORS.store(errors, Ordering::Relaxed);
     tracing::info!(
         "File watcher: watching {} directories across {} roots (excluded {}, errors {})",
         watched,
@@ -129,11 +139,18 @@ fn notify_thread_main(
         match ctrl_rx.recv_timeout(Duration::from_secs(1)) {
             Ok(Control::AddWatch(path)) => {
                 if path_excluded(&path, &exclude) {
+                    DIRS_EXCLUDED.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
                 match watcher.watch(&path, RecursiveMode::NonRecursive) {
-                    Ok(()) => tracing::debug!("notify thread: added watch {:?}", path),
-                    Err(e) => tracing::debug!("notify thread: add watch {:?} failed: {}", path, e),
+                    Ok(()) => {
+                        DIRS_WATCHED.fetch_add(1, Ordering::Relaxed);
+                        tracing::debug!("notify thread: added watch {:?}", path);
+                    }
+                    Err(e) => {
+                        DIRS_ERRORS.fetch_add(1, Ordering::Relaxed);
+                        tracing::debug!("notify thread: add watch {:?} failed: {}", path, e);
+                    }
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {

@@ -456,6 +456,25 @@ async fn do_reindex(
     Ok(count)
 }
 
+fn collect_watcher_stats() -> lupa_ipc::WatcherStats {
+    let (directories, excluded, errors, overflow_events) = watcher::stats();
+    lupa_ipc::WatcherStats {
+        directories,
+        excluded,
+        errors,
+        overflow_events,
+    }
+}
+
+fn collect_writer_stats() -> lupa_ipc::WriterStats {
+    let (commits, last_commit_latency_ms, generation) = index_service::stats();
+    lupa_ipc::WriterStats {
+        commits,
+        last_commit_latency_ms: last_commit_latency_ms.min(u32::MAX as u64) as u32,
+        generation,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_client(
     mut stream: tokio::net::UnixStream,
@@ -565,20 +584,27 @@ async fn handle_client(
         Request::Reindex { paths } => {
             let result = do_reindex(&mutation_tx, &stats, &config, paths).await;
             match result {
-                Ok(_count) => Response::Status {
-                    indexed_docs: stats.read().await.indexed_docs,
-                    last_reindex: stats.read().await.last_reindex,
-                    errors: 0,
-                },
+                Ok(_count) => {
+                    let s = stats.read().await;
+                    Response::Status {
+                        indexed_docs: s.indexed_docs,
+                        last_reindex: s.last_reindex,
+                        errors: 0,
+                        watcher: Some(collect_watcher_stats()),
+                        writer: Some(collect_writer_stats()),
+                    }
+                }
                 Err(e) => Response::Error(format!("Reindex failed: {}", e)),
             }
         }
         Request::Status => {
-            let stats = stats.read().await;
+            let s = stats.read().await;
             Response::Status {
-                indexed_docs: stats.indexed_docs,
-                last_reindex: stats.last_reindex,
+                indexed_docs: s.indexed_docs,
+                last_reindex: s.last_reindex,
                 errors: 0,
+                watcher: Some(collect_watcher_stats()),
+                writer: Some(collect_writer_stats()),
             }
         }
         Request::RecordClick { doc_id } => {

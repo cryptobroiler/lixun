@@ -9,8 +9,21 @@ use anyhow::Result;
 use lupa_core::Document;
 use lupa_index::{LupaIndex, TantivyDoc, TantivyIndexWriter};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc, oneshot};
+
+static COMMITS: AtomicU64 = AtomicU64::new(0);
+static LAST_COMMIT_LATENCY_MS: AtomicU64 = AtomicU64::new(0);
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub fn stats() -> (u64, u64, u64) {
+    (
+        COMMITS.load(Ordering::Relaxed),
+        LAST_COMMIT_LATENCY_MS.load(Ordering::Relaxed),
+        GENERATION.load(Ordering::Relaxed),
+    )
+}
 
 const COMMIT_MIN_INTERVAL: Duration = Duration::from_secs(3);
 const COMMIT_CHECK_INTERVAL: Duration = Duration::from_millis(500);
@@ -285,6 +298,10 @@ async fn do_commit(
     *generation += 1;
     *dirty = false;
     *last_commit = Instant::now();
+    let elapsed_ms = start.elapsed().as_millis().min(u64::MAX as u128) as u64;
+    COMMITS.fetch_add(1, Ordering::Relaxed);
+    LAST_COMMIT_LATENCY_MS.store(elapsed_ms, Ordering::Relaxed);
+    GENERATION.store(*generation, Ordering::Relaxed);
     tracing::debug!(
         "IndexService: committed generation {} in {:?}",
         *generation,

@@ -129,10 +129,24 @@ fn handle_response(resp: Response) {
             indexed_docs,
             last_reindex,
             errors,
+            watcher,
+            writer,
         } => {
             println!("Indexed documents: {}", indexed_docs);
             println!("Last reindex: {:?}", last_reindex);
             println!("Errors: {}", errors);
+            if let Some(w) = watcher {
+                println!(
+                    "Watcher: {} directories ({} excluded, {} errors, {} overflow events)",
+                    w.directories, w.excluded, w.errors, w.overflow_events
+                );
+            }
+            if let Some(w) = writer {
+                println!(
+                    "Writer: {} commits, last latency {} ms, generation {}",
+                    w.commits, w.last_commit_latency_ms, w.generation
+                );
+            }
         }
         Response::Visibility { visible } => {
             println!("{}", if visible { "show" } else { "hide" });
