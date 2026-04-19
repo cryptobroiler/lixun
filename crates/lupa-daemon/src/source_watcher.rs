@@ -1,26 +1,25 @@
+use crate::index_service::{IndexMutationTx, Mutation};
 use anyhow::Result;
-use lupa_index::LupaIndex;
 use lupa_sources::Source;
 use lupa_sources::apps::AppsSource;
 use lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource;
 use notify::{Config, Event, RecursiveMode, Watcher as NotifyWatcher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 
 const REINDEX_COOLDOWN: Duration = Duration::from_secs(30);
 
 pub async fn start(
     apps_source: Arc<AppsSource>,
     attachments_source: Option<Arc<ThunderbirdAttachmentsSource>>,
-    index: Arc<RwLock<LupaIndex>>,
+    mutation_tx: IndexMutationTx,
 ) -> Result<()> {
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Event>(1000);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
 
     let mut watcher = notify::RecommendedWatcher::new(
         move |res: notify::Result<Event>| {
             if let Ok(event) = res {
-                let _ = tx.blocking_send(event);
+                let _ = tx.send(event);
             }
         },
         Config::default(),
@@ -77,7 +76,7 @@ pub async fn start(
                 .unwrap_or(true);
 
             if cooldown_expired {
-                if let Err(e) = reindex_apps(&apps_source, &index).await {
+                if let Err(e) = reindex_apps(&apps_source, &mutation_tx).await {
                     tracing::error!("Apps reindex error: {}", e);
                 }
                 last_apps_reindex = Some(Instant::now());
@@ -103,7 +102,7 @@ pub async fn start(
                     .unwrap_or(true);
 
                 if cooldown_expired {
-                    if let Err(e) = reindex_attachments(attachments_source, &index).await {
+                    if let Err(e) = reindex_attachments(attachments_source).await {
                         tracing::error!("Attachments reindex error: {}", e);
                     }
                     last_attachments_reindex = Some(Instant::now());
@@ -117,22 +116,16 @@ pub async fn start(
     Ok(())
 }
 
-async fn reindex_apps(source: &Arc<AppsSource>, index: &Arc<RwLock<LupaIndex>>) -> Result<()> {
+async fn reindex_apps(source: &Arc<AppsSource>, mutation_tx: &IndexMutationTx) -> Result<()> {
     let docs = source.index_all()?;
-    let mut idx = index.write().await;
-    let mut writer = idx.writer(32_000_000)?;
-    for doc in &docs {
-        idx.upsert(doc, &mut writer)?;
-    }
-    idx.commit(&mut writer)?;
-    tracing::info!("Apps watcher: reindexed {} apps", docs.len());
+    let count = docs.len();
+    mutation_tx.send(Mutation::UpsertMany(docs)).await?;
+    mutation_tx.barrier().await?;
+    tracing::info!("Apps watcher: reindexed {} apps", count);
     Ok(())
 }
 
-async fn reindex_attachments(
-    _source: &Arc<ThunderbirdAttachmentsSource>,
-    _index: &Arc<RwLock<LupaIndex>>,
-) -> Result<()> {
+async fn reindex_attachments(_source: &Arc<ThunderbirdAttachmentsSource>) -> Result<()> {
     tracing::info!(
         "Attachments watcher: change detected, full reindex skipped to avoid reloading entire Thunderbird attachment corpus"
     );

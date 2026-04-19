@@ -16,6 +16,8 @@ use tantivy::{
     Index, IndexWriter, TantivyDocument,
 };
 
+pub use tantivy::{IndexWriter as TantivyIndexWriter, TantivyDocument as TantivyDoc};
+
 use lupa_core::{Category, Document, Hit, Query};
 
 const INDEX_VERSION: u32 = 3;

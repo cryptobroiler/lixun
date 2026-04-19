@@ -8,7 +8,6 @@ use anyhow::Result;
 use bytes::{BufMut, BytesMut};
 use chrono::Utc;
 use futures::StreamExt;
-use lupa_index::LupaIndex;
 use lupa_ipc::{MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, Request, Response, socket_path};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
@@ -18,13 +17,14 @@ use tokio::sync::RwLock;
 mod cursors;
 mod gloda_poll;
 mod history;
+mod index_service;
 mod query_log;
 use history::ClickHistory;
 use query_log::QueryLog;
 
+use index_service::{IndexMutationTx, Mutation, SearchHandle};
 use lupa_daemon::config;
 use lupa_daemon::hotkeys;
-use lupa_daemon::search_service::SearchService;
 use lupa_sources::Source;
 
 mod source_watcher;
@@ -168,15 +168,15 @@ async fn main() -> Result<()> {
         }
     };
 
-    let search = SearchService::new(index);
+    let (mutation_tx, search, _writer_handle) = index_service::spawn_writer_service(index)?;
 
-    let indexer_index = search.index();
+    let indexer_mutation = mutation_tx.clone();
     let indexer_stats = Arc::clone(&stats);
     let indexer_state_dir = state_dir.clone();
     let indexer_config = Arc::clone(&shared_config);
     tokio::spawn(async move {
         if let Err(e) = run_incremental_indexer(
-            indexer_index,
+            indexer_mutation,
             indexer_stats,
             indexer_state_dir,
             indexer_config,
@@ -187,14 +187,13 @@ async fn main() -> Result<()> {
         }
     });
 
-    let watcher_index = search.index();
-
+    let watcher_mutation = mutation_tx.clone();
     tokio::spawn(async move {
         if let Err(e) = watcher::start(
             watcher_roots,
             watcher_exclude,
             watcher_max_size,
-            watcher_index,
+            watcher_mutation,
         )
         .await
         {
@@ -203,10 +202,10 @@ async fn main() -> Result<()> {
     });
 
     if let Some(profile) = lupa_sources::gloda::GlodaSource::find_profile() {
-        let poll_index = search.index();
+        let poll_mutation = mutation_tx.clone();
         let poll_profile = profile.clone();
         tokio::spawn(async move {
-            if let Err(e) = gloda_poll::start(poll_profile, poll_state_dir, poll_index).await {
+            if let Err(e) = gloda_poll::start(poll_profile, poll_state_dir, poll_mutation).await {
                 tracing::error!("Gloda poll error: {}", e);
             }
         });
@@ -219,18 +218,18 @@ async fn main() -> Result<()> {
                 shared_config.max_file_size_mb * 1024 * 1024,
             ),
         );
-        let source_index = search.index();
+        let sw_mutation = mutation_tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = source_watcher::start(apps, Some(attachments), source_index).await {
+            if let Err(e) = source_watcher::start(apps, Some(attachments), sw_mutation).await {
                 tracing::error!("Source watcher error: {}", e);
             }
         });
         tracing::info!("Apps + attachments watchers started");
     } else {
         let apps = Arc::new(lupa_sources::apps::AppsSource::new());
-        let source_index = search.index();
+        let sw_mutation = mutation_tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = source_watcher::start(apps, None, source_index).await {
+            if let Err(e) = source_watcher::start(apps, None, sw_mutation).await {
                 tracing::error!("Source watcher error: {}", e);
             }
         });
@@ -311,6 +310,7 @@ async fn main() -> Result<()> {
                     }
                 };
                 let search = search.clone();
+                let mutation_tx = mutation_tx.clone();
                 let history = Arc::clone(&history);
                 let query_log = Arc::clone(&query_log);
                 let stats = Arc::clone(&stats);
@@ -318,7 +318,7 @@ async fn main() -> Result<()> {
                 let shared_config = Arc::clone(&shared_config);
 
                 tokio::spawn(async move {
-                    if let Err(e) = handle_client(stream, search, history, query_log, stats, gui_state, shared_config).await {
+                    if let Err(e) = handle_client(stream, search, mutation_tx, history, query_log, stats, gui_state, shared_config).await {
                         tracing::debug!("Client error: {}", e);
                     }
                 });
@@ -345,47 +345,40 @@ async fn main() -> Result<()> {
 }
 
 async fn run_incremental_indexer(
-    index: Arc<RwLock<LupaIndex>>,
+    mutation_tx: IndexMutationTx,
     stats: Arc<RwLock<IndexStats>>,
     state_dir: std::path::PathBuf,
     config: Arc<config::Config>,
 ) -> Result<()> {
     let mut manifest = lupa_sources::manifest::Manifest::load(&state_dir);
 
-    // Filesystem source
     {
         let fs_source = config.build_fs_source()?;
         let (docs, deleted_ids) = fs_source.index_incremental(&mut manifest)?;
 
         if !docs.is_empty() || !deleted_ids.is_empty() {
-            let mut idx = index.write().await;
-            let mut writer = idx.writer(32_000_000)?;
-
-            for doc in &docs {
-                idx.upsert(doc, &mut writer)?;
-            }
-            for id in &deleted_ids {
-                idx.delete_by_id(id, &mut writer)?;
-            }
-            idx.commit(&mut writer)?;
+            let doc_count = docs.len();
+            let del_count = deleted_ids.len();
+            mutation_tx.send(Mutation::UpsertMany(docs)).await?;
+            mutation_tx.send(Mutation::DeleteMany(deleted_ids)).await?;
+            let _gen = mutation_tx.barrier().await?;
 
             {
                 let mut stats_lock = stats.write().await;
-                stats_lock.indexed_docs += docs.len() as u64;
+                stats_lock.indexed_docs += doc_count as u64;
                 stats_lock.last_reindex = Some(Utc::now());
             }
 
             tracing::info!(
                 "Filesystem incremental: +{} docs, -{} deleted",
-                docs.len(),
-                deleted_ids.len()
+                doc_count,
+                del_count
             );
         } else {
             tracing::info!("Filesystem: no changes");
         }
     }
 
-    // Other sources (apps, gloda, attachments)
     {
         let indexed_sources: Vec<(&'static str, Vec<lupa_core::Document>)> = {
             let sources = config.build_sources()?;
@@ -397,18 +390,15 @@ async fn run_incremental_indexer(
         };
 
         for (name, docs) in indexed_sources {
-            let mut idx = index.write().await;
-            let mut writer = idx.writer(32_000_000)?;
-            for doc in &docs {
-                idx.upsert(doc, &mut writer)?;
-            }
-            idx.commit(&mut writer)?;
+            let doc_count = docs.len();
+            mutation_tx.send(Mutation::UpsertMany(docs)).await?;
+            let _gen = mutation_tx.barrier().await?;
             {
                 let mut stats_lock = stats.write().await;
-                stats_lock.indexed_docs += docs.len() as u64;
+                stats_lock.indexed_docs += doc_count as u64;
                 stats_lock.last_reindex = Some(Utc::now());
             }
-            tracing::info!("Source {} indexed: {} docs", name, docs.len());
+            tracing::info!("Source {} indexed: {} docs", name, doc_count);
         }
     }
 
@@ -417,32 +407,25 @@ async fn run_incremental_indexer(
 }
 
 async fn do_reindex(
-    search: &SearchService,
+    mutation_tx: &IndexMutationTx,
     stats: &Arc<RwLock<IndexStats>>,
     config: &config::Config,
     paths: Vec<std::path::PathBuf>,
 ) -> Result<usize, anyhow::Error> {
-    let index = search.index();
-    let mut idx = index.write().await;
-    let mut writer = idx.writer(32_000_000)?;
-    let mut count = 0;
+    let mut all_docs: Vec<lupa_core::Document> = Vec::new();
 
     if paths.is_empty() {
         let sources = config.build_sources()?;
         for source in &sources {
             tracing::info!("Reindexing source: {}", source.name());
             let docs = source.index_all()?;
-            for doc in &docs {
-                idx.upsert(doc, &mut writer)?;
-                count += 1;
-            }
+            all_docs.extend(docs);
         }
     } else {
         for path in &paths {
             if path.is_file() {
-                if let Ok(doc) = watcher::index_file(path, config.max_file_size_mb) {
-                    idx.upsert(&doc, &mut writer)?;
-                    count += 1;
+                if let Ok(doc) = index_service::index_file(path, config.max_file_size_mb) {
+                    all_docs.push(doc);
                 }
             } else if path.is_dir() {
                 let source = lupa_sources::fs::FsSource::new(
@@ -451,15 +434,15 @@ async fn do_reindex(
                     config.max_file_size_mb,
                 );
                 let docs = source.index_all()?;
-                for doc in &docs {
-                    idx.upsert(doc, &mut writer)?;
-                    count += 1;
-                }
+                all_docs.extend(docs);
             }
         }
     }
 
-    idx.commit(&mut writer)?;
+    let count = all_docs.len();
+    mutation_tx.send(Mutation::UpsertMany(all_docs)).await?;
+    mutation_tx.commit_now().await?;
+
     {
         let mut stats_lock = stats.write().await;
         stats_lock.indexed_docs += count as u64;
@@ -470,9 +453,11 @@ async fn do_reindex(
     Ok(count)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_client(
     mut stream: tokio::net::UnixStream,
-    search: SearchService,
+    search: SearchHandle,
+    mutation_tx: IndexMutationTx,
     history: Arc<RwLock<ClickHistory>>,
     query_log: Arc<RwLock<QueryLog>>,
     stats: Arc<RwLock<IndexStats>>,
@@ -554,7 +539,7 @@ async fn handle_client(
             state.visible = false;
             Response::Visibility { visible: false }
         }
-        Request::Search { q, limit } => match search.search(&q, limit).await {
+        Request::Search { q, limit } => match search.search(&lupa_core::Query { text: q.clone(), limit }).await {
             Ok(mut hits) => {
                 let history = history.read().await;
                 for hit in &mut hits {
@@ -575,7 +560,7 @@ async fn handle_client(
             Err(e) => Response::Error(e.to_string()),
         },
         Request::Reindex { paths } => {
-            let result = do_reindex(&search, &stats, &config, paths).await;
+            let result = do_reindex(&mutation_tx, &stats, &config, paths).await;
             match result {
                 Ok(_count) => Response::Status {
                     indexed_docs: stats.read().await.indexed_docs,

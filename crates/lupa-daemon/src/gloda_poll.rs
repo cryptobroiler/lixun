@@ -1,18 +1,15 @@
+use crate::cursors::Cursors;
+use crate::index_service::{IndexMutationTx, Mutation};
 use anyhow::Result;
-use lupa_index::LupaIndex;
 use lupa_sources::Source;
 use lupa_sources::gloda::GlodaSource;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
-
-use crate::cursors::Cursors;
 
 pub async fn start(
     profile_path: PathBuf,
     state_dir: PathBuf,
-    index: Arc<RwLock<LupaIndex>>,
+    mutation_tx: IndexMutationTx,
 ) -> Result<()> {
     let poll_interval = Duration::from_secs(30);
 
@@ -48,17 +45,13 @@ pub async fn start(
             .max()
             .unwrap_or(cursors.last_gloda_key);
 
-        let mut idx = index.write().await;
-        let mut writer = idx.writer(32_000_000)?;
-
-        for doc in &docs {
-            if let Err(e) = idx.upsert(doc, &mut writer) {
-                tracing::error!("Gloda upsert error for {}: {}", doc.id.0, e);
-            }
+        let count = docs.len();
+        if let Err(e) = mutation_tx.send(Mutation::UpsertMany(docs)).await {
+            tracing::error!("Gloda: failed to send mutation: {}", e);
+            continue;
         }
-
-        if let Err(e) = idx.commit(&mut writer) {
-            tracing::error!("Gloda commit error: {}", e);
+        if let Err(e) = mutation_tx.barrier().await {
+            tracing::error!("Gloda: barrier failed: {}", e);
             continue;
         }
 
@@ -70,7 +63,7 @@ pub async fn start(
 
         tracing::info!(
             "Gloda poll: indexed {} new messages (cursor: {})",
-            docs.len(),
+            count,
             max_key
         );
     }

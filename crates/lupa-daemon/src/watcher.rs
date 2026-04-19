@@ -1,77 +1,66 @@
+use crate::index_service::{IndexMutationTx, Mutation, fs_doc_id, index_file};
 use anyhow::Result;
-use lupa_core::{Action, Category, DocId, Document};
-use lupa_index::LupaIndex;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 
-/// Debounced file watcher that keeps the index in sync.
 pub async fn start(
     roots: Vec<PathBuf>,
     exclude: Vec<String>,
     max_file_size_mb: u64,
-    index: Arc<RwLock<LupaIndex>>,
+    mutation_tx: IndexMutationTx,
 ) -> Result<()> {
-    // Set up debounced channel
-    let (tx, mut rx) = mpsc::channel::<Event>(1000);
+    let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
 
     let mut watcher = RecommendedWatcher::new(
         move |res: notify::Result<Event>| {
             if let Ok(event) = res {
-                let _ = tx.blocking_send(event);
+                let _ = tx.send(event);
             }
         },
         Config::default(),
     )?;
 
     for root in &roots {
-        watcher.watch(root, RecursiveMode::Recursive)?;
+        if let Err(e) = watcher.watch(root, RecursiveMode::Recursive) {
+            tracing::warn!("Watcher: failed to watch root {:?}: {}", root, e);
+        }
     }
 
     tracing::info!("File watcher started on {} roots", roots.len());
 
-    // Debounce loop
     let debounce_ms = 500;
     loop {
-        // Collect events within debounce window
         let mut events = Vec::new();
         if let Some(event) = rx.recv().await {
             events.push(event);
-            // Drain remaining events within window
             loop {
                 match tokio::time::timeout(Duration::from_millis(debounce_ms), rx.recv()).await {
                     Ok(Some(ev)) => events.push(ev),
                     Ok(None) => break,
-                    Err(_) => break, // timeout
+                    Err(_) => break,
                 }
             }
         } else {
-            break Ok(()); // channel closed
+            break Ok(());
         }
 
-        // Process batch
-        let mut idx = index.write().await;
-        let mut writer = idx.writer(32_000_000)?;
-        let mut changes = 0;
+        let mut upserts: Vec<lupa_core::Document> = Vec::new();
+        let mut deletes: Vec<String> = Vec::new();
 
         for event in events {
             match event.kind {
                 EventKind::Remove(_) => {
                     for path in &event.paths {
-                        let id = format!("fs:{}", path.to_string_lossy());
-                        idx.delete_by_id(&id, &mut writer)?;
-                        changes += 1;
+                        deletes.push(fs_doc_id(path));
                     }
                 }
                 EventKind::Modify(notify::event::ModifyKind::Name(
                     notify::event::RenameMode::From,
                 )) => {
                     for path in &event.paths {
-                        let id = format!("fs:{}", path.to_string_lossy());
-                        idx.delete_by_id(&id, &mut writer)?;
-                        changes += 1;
+                        deletes.push(fs_doc_id(path));
                     }
                 }
                 EventKind::Modify(notify::event::ModifyKind::Name(
@@ -83,8 +72,7 @@ pub async fn start(
                             if !should_exclude(&path_str, &exclude)
                                 && let Ok(doc) = index_file(path, max_file_size_mb)
                             {
-                                idx.upsert(&doc, &mut writer)?;
-                                changes += 1;
+                                upserts.push(doc);
                             }
                         }
                     }
@@ -97,8 +85,7 @@ pub async fn start(
                                 continue;
                             }
                             if let Ok(doc) = index_file(path, max_file_size_mb) {
-                                idx.upsert(&doc, &mut writer)?;
-                                changes += 1;
+                                upserts.push(doc);
                             }
                         }
                     }
@@ -107,9 +94,11 @@ pub async fn start(
             }
         }
 
-        if changes > 0 {
-            idx.commit(&mut writer)?;
-            tracing::debug!("Watcher: committed {} changes", changes);
+        if !deletes.is_empty() {
+            mutation_tx.send(Mutation::DeleteMany(deletes)).await?;
+        }
+        if !upserts.is_empty() {
+            mutation_tx.send(Mutation::UpsertMany(upserts)).await?;
         }
     }
 }
@@ -123,50 +112,22 @@ fn should_exclude(path: &str, exclude: &[String]) -> bool {
     false
 }
 
-pub fn index_file(path: &std::path::Path, max_file_size_mb: u64) -> Result<Document> {
-    let path_str = path.to_string_lossy().to_string();
-    let filename = path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let metadata = std::fs::metadata(path)?;
-    let mtime = metadata
-        .modified()
-        .map(|t| {
-            t.duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0)
-        })
-        .unwrap_or(0);
-    let size = metadata.len();
+    #[test]
+    fn should_exclude_matches_substring() {
+        let exclude = vec![".cache".into(), "node_modules".into(), ".swp".into()];
+        assert!(should_exclude("/home/u/.cache/foo", &exclude));
+        assert!(should_exclude("/home/u/p/node_modules/x", &exclude));
+        assert!(should_exclude("/home/u/tmp/.file.swp", &exclude));
+        assert!(!should_exclude("/home/u/tmp/file.txt", &exclude));
+    }
 
-    let max_size = max_file_size_mb * 1024 * 1024;
-    let (body, extract_fail) = if size <= max_size {
-        match lupa_sources::fs::FsSource::extract_content(path) {
-            Ok(Some(text)) => (Some(text), false),
-            Ok(None) => (None, false),
-            Err(_) => (None, true),
-        }
-    } else {
-        (None, false)
-    };
-    let (icon_name, kind_label) = lupa_sources::fs::FsSource::metadata_for_path(path);
-
-    Ok(Document {
-        id: DocId(format!("fs:{}", path_str)),
-        category: Category::File,
-        title: filename,
-        subtitle: path_str.clone(),
-        icon_name: Some(icon_name),
-        kind_label: Some(kind_label),
-        body,
-        path: path_str,
-        mtime,
-        size,
-        action: Action::OpenFile {
-            path: path.to_path_buf(),
-        },
-        extract_fail,
-    })
+    #[test]
+    fn should_exclude_empty_list() {
+        let exclude: Vec<String> = vec![];
+        assert!(!should_exclude("/any/path", &exclude));
+    }
 }
