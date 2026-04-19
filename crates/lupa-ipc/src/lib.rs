@@ -29,6 +29,14 @@ pub struct WriterStats {
     pub generation: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemoryStats {
+    pub rss_bytes: u64,
+    pub vm_peak_bytes: u64,
+    pub vm_size_bytes: u64,
+    pub vm_swap_bytes: u64,
+}
+
 /// The oldest protocol version this build can negotiate with.
 pub const MIN_PROTOCOL_VERSION: u16 = 1;
 
@@ -61,6 +69,8 @@ pub enum Response {
         watcher: Option<WatcherStats>,
         #[serde(default)]
         writer: Option<WriterStats>,
+        #[serde(default)]
+        memory: Option<MemoryStats>,
     },
     Visibility {
         visible: bool,

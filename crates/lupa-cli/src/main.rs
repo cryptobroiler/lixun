@@ -131,6 +131,7 @@ fn handle_response(resp: Response) {
             errors,
             watcher,
             writer,
+            memory,
         } => {
             println!("Indexed documents: {}", indexed_docs);
             println!("Last reindex: {:?}", last_reindex);
@@ -147,6 +148,15 @@ fn handle_response(resp: Response) {
                     w.commits, w.last_commit_latency_ms, w.generation
                 );
             }
+            if let Some(m) = memory {
+                println!(
+                    "Memory: RSS {}, VmPeak {}, VmSize {}, VmSwap {}",
+                    format_bytes(m.rss_bytes),
+                    format_bytes(m.vm_peak_bytes),
+                    format_bytes(m.vm_size_bytes),
+                    format_bytes(m.vm_swap_bytes),
+                );
+            }
         }
         Response::Visibility { visible } => {
             println!("{}", if visible { "show" } else { "hide" });
@@ -159,5 +169,23 @@ fn handle_response(resp: Response) {
         Response::Error(msg) => {
             eprintln!("Error: {}", msg);
         }
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
+    if bytes == 0 {
+        return "0 B".to_string();
+    }
+    let mut v = bytes as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < UNITS.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{} {}", bytes, UNITS[i])
+    } else {
+        format!("{:.1} {}", v, UNITS[i])
     }
 }

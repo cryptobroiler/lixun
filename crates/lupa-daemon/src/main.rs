@@ -475,6 +475,33 @@ fn collect_writer_stats() -> lupa_ipc::WriterStats {
     }
 }
 
+fn collect_memory_stats() -> lupa_ipc::MemoryStats {
+    let Ok(text) = std::fs::read_to_string("/proc/self/status") else {
+        return lupa_ipc::MemoryStats::default();
+    };
+    let mut m = lupa_ipc::MemoryStats::default();
+    for line in text.lines() {
+        let Some((key, rest)) = line.split_once(':') else {
+            continue;
+        };
+        let Some(kb_str) = rest.split_whitespace().next() else {
+            continue;
+        };
+        let Ok(kb) = kb_str.parse::<u64>() else {
+            continue;
+        };
+        let bytes = kb.saturating_mul(1024);
+        match key {
+            "VmRSS" => m.rss_bytes = bytes,
+            "VmPeak" => m.vm_peak_bytes = bytes,
+            "VmSize" => m.vm_size_bytes = bytes,
+            "VmSwap" => m.vm_swap_bytes = bytes,
+            _ => {}
+        }
+    }
+    m
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_client(
     mut stream: tokio::net::UnixStream,
@@ -592,6 +619,7 @@ async fn handle_client(
                         errors: 0,
                         watcher: Some(collect_watcher_stats()),
                         writer: Some(collect_writer_stats()),
+                        memory: Some(collect_memory_stats()),
                     }
                 }
                 Err(e) => Response::Error(format!("Reindex failed: {}", e)),
@@ -605,6 +633,7 @@ async fn handle_client(
                 errors: 0,
                 watcher: Some(collect_watcher_stats()),
                 writer: Some(collect_writer_stats()),
+                memory: Some(collect_memory_stats()),
             }
         }
         Request::RecordClick { doc_id } => {
