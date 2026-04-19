@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
     let registry = {
         let mut r = lupa_indexer::SourceRegistry::new();
         let sources_state_dir = config.state_dir.join("sources");
-        register_builtin_sources(&mut r, &config, &sources_state_dir);
+        register_builtin_sources(&mut r, &config, &sources_state_dir)?;
         Arc::new(r)
     };
     let (index, rebuilt_from_scratch) = lupa_index::LupaIndex::create_or_open_with_plugins(
@@ -611,59 +611,23 @@ async fn handle_client(
     Ok(())
 }
 
+fn plugin_factories() -> Vec<Box<dyn lupa_sources::PluginFactory>> {
+    vec![
+        Box::new(lupa_source_maildir::MaildirFactory),
+        Box::new(lupa_source_thunderbird::ThunderbirdFactory),
+    ]
+}
+
 fn register_builtin_sources(
     registry: &mut lupa_indexer::SourceRegistry,
     config: &config::Config,
     state_dir_root: &std::path::Path,
-) {
+) -> anyhow::Result<()> {
     registry.register(
         "builtin:apps".into(),
         state_dir_root,
         Arc::new(lupa_sources::apps::AppsSource::new()),
     );
-
-    if config.thunderbird.enabled {
-        #[allow(deprecated)]
-        let profile = config
-            .thunderbird
-            .profile_override
-            .clone()
-            .or_else(lupa_source_thunderbird::find_profile);
-        if let Some(profile) = profile {
-            if !profile.exists() {
-                tracing::warn!(
-                    "thunderbird: configured profile {:?} does not exist; skipping gloda + attachments",
-                    profile
-                );
-            } else {
-                registry.register(
-                    "builtin:gloda".into(),
-                    state_dir_root,
-                    Arc::new(lupa_source_thunderbird::GlodaSource::new(
-                        profile.clone(),
-                        0,
-                        config.thunderbird.gloda_batch_size,
-                    )),
-                );
-                if config.thunderbird.attachments {
-                    registry.register(
-                        "builtin:tb_attachments".into(),
-                        state_dir_root,
-                        Arc::new(lupa_source_thunderbird::ThunderbirdAttachmentsSource::new(
-                            profile,
-                            config.max_file_size_mb * 1024 * 1024,
-                        )),
-                    );
-                } else {
-                    tracing::info!(
-                        "thunderbird: attachments disabled by config; registering gloda only"
-                    );
-                }
-            }
-        }
-    } else {
-        tracing::info!("thunderbird: disabled by config; skipping gloda + attachments");
-    }
 
     let fs = lupa_sources::fs::FsSource::with_regex(
         config.roots.clone(),
@@ -673,13 +637,43 @@ fn register_builtin_sources(
     );
     registry.register("builtin:fs".into(), state_dir_root, Arc::new(fs));
 
-    for md in &config.maildir {
-        let source = lupa_source_maildir::MaildirSource::new(md.paths.clone(), md.open_cmd.clone());
-        registry.register(md.id.clone(), state_dir_root, Arc::new(source));
+    let factories = plugin_factories();
+    let mut known_sections: std::collections::HashSet<&'static str> =
+        std::collections::HashSet::new();
+    for factory in &factories {
+        known_sections.insert(factory.section());
+    }
+    for section_name in config.plugin_sections.keys() {
+        if !known_sections.contains(section_name.as_str()) {
+            tracing::warn!(
+                "config: unknown plugin section [{}]; no factory registered. Typo?",
+                section_name
+            );
+        }
+    }
+
+    let ctx = lupa_sources::PluginBuildContext {
+        max_file_size_mb: config.max_file_size_mb,
+        state_dir_root: state_dir_root.to_path_buf(),
+    };
+    for factory in factories {
+        let section = factory.section();
+        let Some(raw) = config.plugin_sections.get(section) else {
+            continue;
+        };
+        let instances = factory.build(raw, &ctx).map_err(|e| {
+            anyhow::anyhow!("plugin factory '{}' failed to build: {}", section, e)
+        })?;
+        let count = instances.len();
+        for inst in instances {
+            registry.register(inst.instance_id, state_dir_root, inst.source);
+        }
         tracing::info!(
-            "maildir source '{}' registered with {} root(s)",
-            md.id,
-            md.paths.len()
+            "plugin '{}' registered {} instance(s) from config",
+            section,
+            count
         );
     }
+
+    Ok(())
 }

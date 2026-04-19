@@ -2,7 +2,18 @@
 
 use anyhow::Result;
 use serde::Deserialize;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
+
+const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
+    "roots",
+    "exclude",
+    "exclude_regex",
+    "max_file_size_mb",
+    "extractor_timeout_secs",
+    "ranking",
+    "keybindings",
+];
 
 #[derive(Debug, Deserialize)]
 struct ConfigToml {
@@ -13,33 +24,6 @@ struct ConfigToml {
     extractor_timeout_secs: Option<u64>,
     ranking: Option<RankingToml>,
     keybindings: Option<KeybindingsToml>,
-    #[serde(default)]
-    maildir: Vec<MaildirSourceToml>,
-    thunderbird: Option<ThunderbirdToml>,
-}
-
-#[derive(Debug, Deserialize)]
-struct MaildirSourceToml {
-    id: String,
-    #[serde(default = "default_true")]
-    enabled: bool,
-    paths: Vec<String>,
-    #[serde(default)]
-    open_cmd: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ThunderbirdToml {
-    #[serde(default = "default_true")]
-    enabled: bool,
-    profile: Option<String>,
-    gloda_batch_size: Option<u32>,
-    #[serde(default = "default_true")]
-    attachments: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,32 +74,6 @@ pub struct Keybindings {
     pub global_toggle: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct MaildirConfig {
-    pub id: String,
-    pub paths: Vec<PathBuf>,
-    pub open_cmd: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ThunderbirdConfig {
-    pub enabled: bool,
-    pub profile_override: Option<PathBuf>,
-    pub gloda_batch_size: u32,
-    pub attachments: bool,
-}
-
-impl Default for ThunderbirdConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            profile_override: None,
-            gloda_batch_size: 250,
-            attachments: true,
-        }
-    }
-}
-
 pub struct Config {
     pub roots: Vec<PathBuf>,
     pub exclude: Vec<String>,
@@ -128,8 +86,7 @@ pub struct Config {
     pub ranking_attachments: f32,
     pub keybindings: Keybindings,
     pub state_dir: PathBuf,
-    pub maildir: Vec<MaildirConfig>,
-    pub thunderbird: ThunderbirdConfig,
+    pub plugin_sections: BTreeMap<String, toml::Value>,
 }
 
 impl Default for Config {
@@ -147,8 +104,7 @@ impl Default for Config {
             ranking_attachments: 0.9,
             keybindings: Keybindings::default(),
             state_dir: state_dir(),
-            maildir: Vec::new(),
-            thunderbird: ThunderbirdConfig::default(),
+            plugin_sections: BTreeMap::new(),
         }
     }
 }
@@ -295,46 +251,14 @@ impl Config {
             }
         }
 
-        for md in parsed.maildir {
-            if !md.enabled {
-                continue;
-            }
-            if md.paths.is_empty() {
-                tracing::warn!(
-                    "config: skipping maildir source '{}': no paths configured",
-                    md.id
-                );
-                continue;
-            }
-            cfg.maildir.push(MaildirConfig {
-                id: md.id,
-                paths: md.paths.iter().map(|p| expand_tilde(p)).collect(),
-                open_cmd: md.open_cmd,
-            });
-        }
-
-        let mut seen_ids = std::collections::HashSet::new();
-        for md in &cfg.maildir {
-            if !seen_ids.insert(md.id.clone()) {
-                anyhow::bail!(
-                    "config: duplicate maildir source id '{}'; each [[maildir]] entry must have a unique id",
-                    md.id
-                );
-            }
-        }
-
-        if let Some(tb) = parsed.thunderbird {
-            cfg.thunderbird.enabled = tb.enabled;
-            cfg.thunderbird.attachments = tb.attachments;
-            if let Some(batch) = tb.gloda_batch_size {
-                if batch == 0 {
-                    anyhow::bail!("config: [thunderbird] gloda_batch_size must be > 0 (got 0)");
+        let known: HashSet<&'static str> = KNOWN_TOP_LEVEL_KEYS.iter().copied().collect();
+        let raw: toml::Value = toml::from_str(content)?;
+        if let toml::Value::Table(top) = raw {
+            for (key, value) in top {
+                if known.contains(key.as_str()) {
+                    continue;
                 }
-                cfg.thunderbird.gloda_batch_size = batch;
-            }
-            if let Some(profile) = tb.profile {
-                let path = expand_tilde(&profile);
-                cfg.thunderbird.profile_override = Some(path);
+                cfg.plugin_sections.insert(key, value);
             }
         }
 

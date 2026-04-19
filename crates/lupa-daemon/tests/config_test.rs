@@ -95,82 +95,89 @@ fn missing_exclude_sections_leave_defaults_intact() {
 }
 
 #[test]
-fn thunderbird_section_absent_uses_defaults() {
+fn empty_config_has_no_plugin_sections() {
     let cfg = Config::from_toml_str("").unwrap();
-    assert!(cfg.thunderbird.enabled);
-    assert!(cfg.thunderbird.attachments);
-    assert_eq!(cfg.thunderbird.gloda_batch_size, 250);
-    assert!(cfg.thunderbird.profile_override.is_none());
+    assert!(cfg.plugin_sections.is_empty());
 }
 
 #[test]
-fn thunderbird_disabled_flag_propagates() {
+fn unknown_top_level_keys_captured_as_plugin_sections() {
     let cfg = Config::from_toml_str(
         r#"
+        max_file_size_mb = 25
+
         [thunderbird]
-        enabled = false
+        enabled = true
+        gloda_batch_size = 500
+
+        [[maildir]]
+        id = "personal"
+        paths = ["~/Mail"]
     "#,
     )
     .unwrap();
-    assert!(!cfg.thunderbird.enabled);
-    assert!(cfg.thunderbird.attachments);
+    assert_eq!(cfg.plugin_sections.len(), 2);
+    assert!(cfg.plugin_sections.contains_key("thunderbird"));
+    assert!(cfg.plugin_sections.contains_key("maildir"));
 }
 
 #[test]
-fn thunderbird_attachments_can_be_disabled_independently() {
-    let cfg = Config::from_toml_str(
-        r#"
-        [thunderbird]
-        attachments = false
-    "#,
-    )
-    .unwrap();
-    assert!(cfg.thunderbird.enabled);
-    assert!(!cfg.thunderbird.attachments);
-}
-
-#[test]
-fn thunderbird_custom_batch_size_and_profile() {
+fn plugin_section_preserves_raw_toml_for_factory() {
     let cfg = Config::from_toml_str(
         r#"
         [thunderbird]
         gloda_batch_size = 1000
-        profile = "~/.thunderbird/work.default-release"
+        profile = "~/.thunderbird/work"
     "#,
     )
     .unwrap();
-    assert_eq!(cfg.thunderbird.gloda_batch_size, 1000);
-    let profile = cfg.thunderbird.profile_override.expect("profile set");
-    assert!(
-        profile.to_string_lossy().ends_with("work.default-release"),
-        "profile override stored: {:?}",
-        profile
+    let raw = cfg.plugin_sections.get("thunderbird").unwrap();
+    let table = raw.as_table().expect("thunderbird is a table");
+    assert_eq!(
+        table.get("gloda_batch_size").and_then(|v| v.as_integer()),
+        Some(1000)
     );
-    let home = std::env::var("HOME").unwrap_or_default();
-    if !home.is_empty() {
-        assert!(
-            profile.starts_with(&home),
-            "tilde must expand: {:?}",
-            profile
-        );
-    }
+    assert_eq!(
+        table.get("profile").and_then(|v| v.as_str()),
+        Some("~/.thunderbird/work")
+    );
 }
 
 #[test]
-fn thunderbird_zero_batch_size_rejected() {
-    let result = Config::from_toml_str(
+fn plugin_section_maildir_preserved_as_array() {
+    let cfg = Config::from_toml_str(
         r#"
-        [thunderbird]
-        gloda_batch_size = 0
+        [[maildir]]
+        id = "a"
+        paths = ["/tmp/a"]
+
+        [[maildir]]
+        id = "b"
+        paths = ["/tmp/b"]
     "#,
-    );
-    let err = match result {
-        Ok(_) => panic!("expected error for gloda_batch_size = 0"),
-        Err(e) => e,
-    };
-    assert!(
-        err.to_string().contains("gloda_batch_size"),
-        "error message mentions field: {}",
-        err
-    );
+    )
+    .unwrap();
+    let raw = cfg.plugin_sections.get("maildir").unwrap();
+    let arr = raw.as_array().expect("maildir is array-of-tables");
+    assert_eq!(arr.len(), 2);
+}
+
+#[test]
+fn known_keys_never_leak_into_plugin_sections() {
+    let cfg = Config::from_toml_str(
+        r#"
+        roots = ["/tmp/custom"]
+        exclude = [".foo"]
+        max_file_size_mb = 100
+
+        [ranking]
+        apps = 2.0
+
+        [keybindings]
+        close = "Escape"
+    "#,
+    )
+    .unwrap();
+    assert!(cfg.plugin_sections.is_empty());
+    assert_eq!(cfg.max_file_size_mb, 100);
 }

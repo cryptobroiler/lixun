@@ -15,9 +15,3 @@ mod factory;
 pub use attachments::ThunderbirdAttachmentsSource;
 pub use factory::ThunderbirdFactory;
 pub use gloda::GlodaSource;
-
-#[doc(hidden)]
-#[deprecated(note = "use ThunderbirdFactory via config section; removed in G.4")]
-pub fn find_profile() -> Option<std::path::PathBuf> {
-    gloda::find_profile()
-}
