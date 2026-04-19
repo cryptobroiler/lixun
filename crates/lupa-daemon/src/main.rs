@@ -32,6 +32,8 @@ use lupa_indexer::watcher;
 struct IndexStats {
     indexed_docs: u64,
     last_reindex: Option<chrono::DateTime<Utc>>,
+    reindex_in_progress: bool,
+    reindex_started: Option<chrono::DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -553,20 +555,65 @@ async fn handle_client(
             Err(e) => Response::Error(e.to_string()),
         },
         Request::Reindex { paths } => {
-            let result = do_reindex(&mutation_tx, &stats, &config, registry.as_ref(), &config.state_dir, paths).await;
-            match result {
-                Ok(_count) => {
-                    let s = stats.read().await;
-                    Response::Status {
-                        indexed_docs: s.indexed_docs,
-                        last_reindex: s.last_reindex,
-                        errors: 0,
-                        watcher: Some(collect_watcher_stats()),
-                        writer: Some(collect_writer_stats()),
-                        memory: Some(collect_memory_stats()),
-                    }
+            let already_running = {
+                let mut s = stats.write().await;
+                if s.reindex_in_progress {
+                    true
+                } else {
+                    s.reindex_in_progress = true;
+                    s.reindex_started = Some(Utc::now());
+                    false
                 }
-                Err(e) => Response::Error(format!("Reindex failed: {}", e)),
+            };
+            if already_running {
+                let s = stats.read().await;
+                let started = s
+                    .reindex_started
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_else(|| "unknown".into());
+                Response::Error(format!(
+                    "Reindex already in progress (started {})",
+                    started
+                ))
+            } else {
+                let stats_for_task = Arc::clone(&stats);
+                let mutation_tx_for_task = mutation_tx.clone();
+                let config_for_task = Arc::clone(&config);
+                let registry_for_task = Arc::clone(&registry);
+                let state_dir_for_task = config.state_dir.clone();
+                tokio::spawn(async move {
+                    let result = do_reindex(
+                        &mutation_tx_for_task,
+                        &stats_for_task,
+                        &config_for_task,
+                        registry_for_task.as_ref(),
+                        &state_dir_for_task,
+                        paths,
+                    )
+                    .await;
+                    let mut s = stats_for_task.write().await;
+                    s.reindex_in_progress = false;
+                    s.reindex_started = None;
+                    match result {
+                        Ok(count) => {
+                            tracing::info!("Background reindex complete: {} docs", count);
+                        }
+                        Err(e) => {
+                            tracing::error!("Background reindex failed: {}", e);
+                        }
+                    }
+                });
+                let s = stats.read().await;
+                Response::Status {
+                    indexed_docs: s.indexed_docs,
+                    last_reindex: s.last_reindex,
+                    errors: 0,
+                    watcher: Some(collect_watcher_stats()),
+                    writer: Some(collect_writer_stats()),
+                    memory: Some(collect_memory_stats()),
+                    reindex_in_progress: s.reindex_in_progress,
+                    reindex_started: s.reindex_started,
+                }
             }
         }
         Request::Status => {
@@ -578,6 +625,8 @@ async fn handle_client(
                 watcher: Some(collect_watcher_stats()),
                 writer: Some(collect_writer_stats()),
                 memory: Some(collect_memory_stats()),
+                reindex_in_progress: s.reindex_in_progress,
+                reindex_started: s.reindex_started,
             }
         }
         Request::RecordClick { doc_id } => {

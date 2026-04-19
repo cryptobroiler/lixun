@@ -71,6 +71,10 @@ pub enum Response {
         writer: Option<WriterStats>,
         #[serde(default)]
         memory: Option<MemoryStats>,
+        #[serde(default)]
+        reindex_in_progress: bool,
+        #[serde(default)]
+        reindex_started: Option<DateTime<Utc>>,
     },
     Visibility {
         visible: bool,

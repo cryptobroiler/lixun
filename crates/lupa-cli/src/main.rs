@@ -92,7 +92,11 @@ async fn main() -> Result<()> {
         }
         Commands::Reindex { paths } => {
             let resp = send_request(Request::Reindex { paths }).await?;
-            handle_response(resp);
+            if matches!(resp, Response::Status { .. }) {
+                println!("Reindex started in background. Check progress with: lupa status");
+            } else {
+                handle_response(resp);
+            }
         }
         Commands::Status => {
             let resp = send_request(Request::Status).await?;
@@ -132,10 +136,18 @@ fn handle_response(resp: Response) {
             watcher,
             writer,
             memory,
+            reindex_in_progress,
+            reindex_started,
         } => {
             println!("Indexed documents: {}", indexed_docs);
             println!("Last reindex: {:?}", last_reindex);
             println!("Errors: {}", errors);
+            if reindex_in_progress {
+                let started = reindex_started
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_else(|| "unknown".into());
+                println!("Reindex: RUNNING (started {})", started);
+            }
             if let Some(w) = watcher {
                 println!(
                     "Watcher: {} directories ({} excluded, {} errors, {} overflow events)",
