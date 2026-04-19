@@ -11,5 +11,6 @@ pub mod mime_icons;
 pub mod source;
 
 pub use source::{
-    IndexerSource, Mutation, MutationSink, SourceContext, SourceEvent, SourceEventKind, WatchSpec,
+    IndexerSource, Mutation, MutationSink, PluginBuildContext, PluginFactory, PluginInstance,
+    SourceContext, SourceEvent, SourceEventKind, WatchSpec,
 };

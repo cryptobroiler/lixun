@@ -15,6 +15,7 @@ regex.workspace = true
 tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+toml = "0.8"
 mime_guess = "2"
 
 [dev-dependencies]

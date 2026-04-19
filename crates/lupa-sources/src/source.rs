@@ -1,6 +1,7 @@
 use anyhow::Result;
 use lupa_core::{Document, PluginFieldSpec};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub struct SourceContext<'a> {
@@ -75,6 +76,28 @@ pub trait IndexerSource: Send + Sync {
     fn extra_fields(&self) -> &'static [PluginFieldSpec] {
         &[]
     }
+}
+
+pub struct PluginBuildContext {
+    pub max_file_size_mb: u64,
+    pub state_dir_root: PathBuf,
+}
+
+pub struct PluginInstance {
+    pub instance_id: String,
+    pub source: Arc<dyn IndexerSource>,
+}
+
+/// Config-driven registration of opt-in source plugins.
+///
+/// Daemon startup iterates over `plugin_factories()` and, for each factory
+/// whose `section()` matches a top-level key in the user's config, calls
+/// `build()` with the raw TOML subtree. Absent sections are skipped — the
+/// factory never sees a `None`.
+pub trait PluginFactory: Send + Sync {
+    fn section(&self) -> &'static str;
+
+    fn build(&self, raw: &toml::Value, ctx: &PluginBuildContext) -> Result<Vec<PluginInstance>>;
 }
 
 #[cfg(test)]
