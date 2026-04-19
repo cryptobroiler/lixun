@@ -18,6 +18,7 @@ lupa-ipc = { path = "../lupa-ipc" }
 lupa-index = { path = "../lupa-index" }
 lupa-sources = { path = "../lupa-sources" }
 lupa-source-maildir = { path = "../lupa-source-maildir" }
+lupa-source-thunderbird = { path = "../lupa-source-thunderbird" }
 lupa-indexer = { path = "../lupa-indexer" }
 anyhow.workspace = true
 tracing.workspace = true

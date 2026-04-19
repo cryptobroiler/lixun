@@ -622,21 +622,23 @@ fn register_builtin_sources(
         Arc::new(lupa_sources::apps::AppsSource::new()),
     );
 
-    if let Some(profile) = lupa_sources::gloda::GlodaSource::find_profile() {
+    if let Some(profile) = lupa_source_thunderbird::find_profile() {
         registry.register(
             "builtin:gloda".into(),
             state_dir_root,
-            Arc::new(lupa_sources::gloda::GlodaSource::new(profile.clone(), 0, 250)),
+            Arc::new(lupa_source_thunderbird::GlodaSource::new(
+                profile.clone(),
+                0,
+                250,
+            )),
         );
         registry.register(
             "builtin:tb_attachments".into(),
             state_dir_root,
-            Arc::new(
-                lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource::new(
-                    profile,
-                    config.max_file_size_mb * 1024 * 1024,
-                ),
-            ),
+            Arc::new(lupa_source_thunderbird::ThunderbirdAttachmentsSource::new(
+                profile,
+                config.max_file_size_mb * 1024 * 1024,
+            )),
         );
     }
 

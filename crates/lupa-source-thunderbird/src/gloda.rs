@@ -308,7 +308,7 @@ fn write_cursor(state_dir: &std::path::Path, last_key: u64) -> Result<()> {
     Ok(())
 }
 
-impl crate::source::IndexerSource for GlodaSource {
+impl lupa_sources::source::IndexerSource for GlodaSource {
     fn kind(&self) -> &'static str {
         "gloda"
     }
@@ -319,8 +319,8 @@ impl crate::source::IndexerSource for GlodaSource {
 
     fn on_tick(
         &self,
-        ctx: &crate::source::SourceContext,
-        sink: &dyn crate::source::MutationSink,
+        ctx: &lupa_sources::source::SourceContext,
+        sink: &dyn lupa_sources::source::MutationSink,
     ) -> Result<()> {
         let db_path = self.profile_path.join("global-messages-db.sqlite");
         if !db_path.exists() {
@@ -353,7 +353,7 @@ impl crate::source::IndexerSource for GlodaSource {
             }
             let mut d = doc;
             d.source_instance = ctx.instance_id.to_string();
-            sink.emit(crate::source::Mutation::Upsert(Box::new(d)))?;
+            sink.emit(lupa_sources::source::Mutation::Upsert(Box::new(d)))?;
         }
 
         if new_cursor > cursor {
@@ -364,10 +364,10 @@ impl crate::source::IndexerSource for GlodaSource {
 
     fn reindex_full(
         &self,
-        ctx: &crate::source::SourceContext,
-        sink: &dyn crate::source::MutationSink,
+        ctx: &lupa_sources::source::SourceContext,
+        sink: &dyn lupa_sources::source::MutationSink,
     ) -> Result<()> {
-        sink.emit(crate::source::Mutation::DeleteSourceInstance {
+        sink.emit(lupa_sources::source::Mutation::DeleteSourceInstance {
             instance_id: ctx.instance_id.to_string(),
         })?;
         let _ = std::fs::remove_file(ctx.state_dir.join(GLODA_CURSOR_FILE));
@@ -404,7 +404,7 @@ impl crate::source::IndexerSource for GlodaSource {
                 }
                 let mut d = doc;
                 d.source_instance = ctx.instance_id.to_string();
-                sink.emit(crate::source::Mutation::Upsert(Box::new(d)))?;
+                sink.emit(lupa_sources::source::Mutation::Upsert(Box::new(d)))?;
             }
 
             if new_cursor == cursor {

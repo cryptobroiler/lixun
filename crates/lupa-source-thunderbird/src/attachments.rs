@@ -1,7 +1,7 @@
 //! Thunderbird attachments source — parse mbox files for attachments.
 
 use crate::mbox;
-use crate::mime_icons;
+use lupa_sources::mime_icons;
 use anyhow::Result;
 use lupa_core::{Action, Category, DocId, Document};
 use mime_guess::Mime;
@@ -140,20 +140,20 @@ impl ThunderbirdAttachmentsSource {
     }
 }
 
-impl crate::source::IndexerSource for ThunderbirdAttachmentsSource {
+impl lupa_sources::source::IndexerSource for ThunderbirdAttachmentsSource {
     fn kind(&self) -> &'static str {
         "tb_attachments"
     }
 
     fn watch_paths(
         &self,
-        _ctx: &crate::source::SourceContext,
-    ) -> Result<Vec<crate::source::WatchSpec>> {
+        _ctx: &lupa_sources::source::SourceContext,
+    ) -> Result<Vec<lupa_sources::source::WatchSpec>> {
         let mut out = Vec::new();
         for rel in ["Mail", "ImapMail"] {
             let p = self.profile_path.join(rel);
             if p.exists() {
-                out.push(crate::source::WatchSpec {
+                out.push(lupa_sources::source::WatchSpec {
                     path: p,
                     recursive: true,
                 });
@@ -164,9 +164,9 @@ impl crate::source::IndexerSource for ThunderbirdAttachmentsSource {
 
     fn on_fs_events(
         &self,
-        _ctx: &crate::source::SourceContext,
-        events: &[crate::source::SourceEvent],
-        _sink: &dyn crate::source::MutationSink,
+        _ctx: &lupa_sources::source::SourceContext,
+        events: &[lupa_sources::source::SourceEvent],
+        _sink: &dyn lupa_sources::source::MutationSink,
     ) -> Result<()> {
         tracing::info!(
             "attachments: {} fs event(s) observed; no-op (full reindex requires explicit `lupa reindex`)",
@@ -181,17 +181,17 @@ impl crate::source::IndexerSource for ThunderbirdAttachmentsSource {
 
     fn reindex_full(
         &self,
-        ctx: &crate::source::SourceContext,
-        sink: &dyn crate::source::MutationSink,
+        ctx: &lupa_sources::source::SourceContext,
+        sink: &dyn lupa_sources::source::MutationSink,
     ) -> Result<()> {
-        sink.emit(crate::source::Mutation::DeleteSourceInstance {
+        sink.emit(lupa_sources::source::Mutation::DeleteSourceInstance {
             instance_id: ctx.instance_id.to_string(),
         })?;
 
         let docs = self.index_all()?;
         for mut doc in docs {
             doc.source_instance = ctx.instance_id.to_string();
-            sink.emit(crate::source::Mutation::Upsert(Box::new(doc)))?;
+            sink.emit(lupa_sources::source::Mutation::Upsert(Box::new(doc)))?;
         }
         Ok(())
     }
