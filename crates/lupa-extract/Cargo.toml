@@ -13,3 +13,4 @@ rtf-grimoire.workspace = true
 which = "6"
 tempfile = "3"
 wait-timeout = "0.2"
+libc = "0.2"

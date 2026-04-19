@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -35,6 +36,7 @@ impl CommandRunner for SystemRunner {
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .process_group(0)
             .spawn()?;
 
         // Invariant: both pipes were just configured as Stdio::piped() above,
@@ -61,6 +63,7 @@ impl CommandRunner for SystemRunner {
             match child.wait_timeout(self.timeout)? {
                 Some(s) => s,
                 None => {
+                    let _ = unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
                     let _ = child.kill();
                     let _ = child.wait();
                     // Killing the child closes the pipes, so the worker threads
