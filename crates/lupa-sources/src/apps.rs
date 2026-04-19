@@ -138,12 +138,8 @@ impl AppsSource {
     }
 }
 
-impl crate::Source for AppsSource {
-    fn name(&self) -> &'static str {
-        "applications"
-    }
-
-    fn index_all(&self) -> Result<Vec<Document>> {
+impl AppsSource {
+    pub fn index_all(&self) -> Result<Vec<Document>> {
         let mut docs = Vec::new();
 
         for dir in &self.search_dirs {
@@ -226,7 +222,7 @@ impl crate::source::IndexerSource for AppsSource {
             instance_id: ctx.instance_id.to_string(),
         })?;
 
-        let docs = <Self as crate::Source>::index_all(self)?;
+        let docs = self.index_all()?;
         for mut doc in docs {
             doc.source_instance = ctx.instance_id.to_string();
             sink.emit(crate::source::Mutation::Upsert(Box::new(doc)))?;
@@ -238,7 +234,6 @@ impl crate::source::IndexerSource for AppsSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Source;
     use std::fs;
 
     #[test]

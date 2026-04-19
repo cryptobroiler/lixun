@@ -276,12 +276,8 @@ impl FsSource {
     }
 }
 
-impl crate::Source for FsSource {
-    fn name(&self) -> &'static str {
-        "filesystem"
-    }
-
-    fn index_all(&self) -> Result<Vec<Document>> {
+impl FsSource {
+    pub fn index_all(&self) -> Result<Vec<Document>> {
         let max_size = self.max_file_size_mb * 1024 * 1024;
 
         let mut metas: Vec<FileMeta> = Vec::new();
@@ -408,7 +404,6 @@ impl crate::source::IndexerSource for FsSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Source;
 
     #[test]
     fn test_index_all_sets_pdf_icon_and_kind() {

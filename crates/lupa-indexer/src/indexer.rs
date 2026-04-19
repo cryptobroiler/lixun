@@ -3,7 +3,6 @@
 
 use anyhow::Result;
 use lupa_core::Document;
-use lupa_sources::Source;
 use lupa_sources::manifest::Manifest;
 use lupa_sources::source::{Mutation as SourceMutation, MutationSink, SourceContext};
 use std::collections::HashSet;

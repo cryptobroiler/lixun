@@ -33,12 +33,8 @@ fn attachment_metadata(mime: &str) -> (Option<String>, Option<String>) {
     )
 }
 
-impl crate::Source for ThunderbirdAttachmentsSource {
-    fn name(&self) -> &'static str {
-        "thunderbird_attachments"
-    }
-
-    fn index_all(&self) -> Result<Vec<Document>> {
+impl ThunderbirdAttachmentsSource {
+    pub fn index_all(&self) -> Result<Vec<Document>> {
         let mail_path = self.profile_path.join("Mail");
         let imap_path = self.profile_path.join("ImapMail");
         let mut docs = Vec::new();
@@ -192,7 +188,7 @@ impl crate::source::IndexerSource for ThunderbirdAttachmentsSource {
             instance_id: ctx.instance_id.to_string(),
         })?;
 
-        let docs = <Self as crate::Source>::index_all(self)?;
+        let docs = self.index_all()?;
         for mut doc in docs {
             doc.source_instance = ctx.instance_id.to_string();
             sink.emit(crate::source::Mutation::Upsert(Box::new(doc)))?;
@@ -204,7 +200,6 @@ impl crate::source::IndexerSource for ThunderbirdAttachmentsSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Source;
     use base64::Engine;
     use tempfile::tempdir;
 

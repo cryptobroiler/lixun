@@ -302,33 +302,11 @@ impl Config {
             self.max_file_size_mb,
         ))
     }
-
-    pub fn build_sources(&self) -> Result<Vec<Box<dyn lupa_sources::Source>>> {
-        let mut sources: Vec<Box<dyn lupa_sources::Source>> = Vec::new();
-
-        sources.push(Box::new(lupa_sources::apps::AppsSource::new()));
-
-        if let Some(profile) = lupa_sources::gloda::GlodaSource::find_profile() {
-            sources.push(Box::new(lupa_sources::gloda::GlodaSource::new(
-                profile.clone(),
-                0,
-                250,
-            )));
-            // Full Thunderbird attachment indexing is disabled by default for now.
-            // It is too expensive for large mailboxes and was the main source of
-            // multi-GB memory peaks during startup and watcher-triggered reindexing.
-        }
-
-        Ok(sources)
-    }
 }
 
 impl lupa_indexer::IndexerSources for Config {
     fn build_fs_source(&self) -> Result<lupa_sources::fs::FsSource> {
         Config::build_fs_source(self)
-    }
-    fn build_sources(&self) -> Result<Vec<Box<dyn lupa_sources::Source>>> {
-        Config::build_sources(self)
     }
     fn exclude(&self) -> &[String] {
         &self.exclude

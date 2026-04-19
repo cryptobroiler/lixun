@@ -1,4 +1,3 @@
-pub mod cursors;
 pub mod index_service;
 pub mod indexer;
 pub mod plugin_fs_watcher;

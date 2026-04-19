@@ -286,41 +286,6 @@ fn strip_angle_brackets(s: String) -> String {
     }
 }
 
-impl crate::Source for GlodaSource {
-    fn name(&self) -> &'static str {
-        "gloda"
-    }
-
-    fn index_all(&self) -> Result<Vec<Document>> {
-        let db_path = self.profile_path.join("global-messages-db.sqlite");
-        if !db_path.exists() {
-            tracing::warn!("Gloda DB not found at {:?}", db_path);
-            return Ok(Vec::new());
-        }
-
-        let result: rusqlite::Result<Vec<Document>> = with_busy_retry(|| {
-            let conn = self.open_db()?;
-            let docs = query_messages(&conn, self.last_key, self.limit)?;
-            Ok(docs)
-        });
-
-        match result {
-            Ok(docs) => {
-                tracing::info!("Gloda: indexed {} messages", docs.len());
-                Ok(docs)
-            }
-            Err(e) => {
-                if is_busy(&e) {
-                    tracing::warn!("gloda busy after retries; deferring to next poll cycle");
-                    Ok(Vec::new())
-                } else {
-                    Err(e.into())
-                }
-            }
-        }
-    }
-}
-
 const GLODA_CURSOR_FILE: &str = "gloda_cursor.json";
 const GLODA_BATCH_LIMIT: u32 = 250;
 
