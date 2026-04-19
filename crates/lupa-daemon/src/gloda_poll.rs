@@ -20,11 +20,9 @@ pub async fn start(
         tokio::time::sleep(poll_interval).await;
 
         let cursors = Cursors::load(&state_dir);
-        if cursors.last_gloda_key == 0 {
-            continue;
-        }
 
-        let source = GlodaSource::new(profile_path.clone(), cursors.last_gloda_key);
+        let batch_size = 250;
+        let source = GlodaSource::new(profile_path.clone(), cursors.last_gloda_key, batch_size);
 
         let docs = match source.index_all() {
             Ok(docs) => docs,
@@ -51,7 +49,7 @@ pub async fn start(
             .unwrap_or(cursors.last_gloda_key);
 
         let mut idx = index.write().await;
-        let mut writer = idx.writer(128_000_000)?;
+        let mut writer = idx.writer(32_000_000)?;
 
         for doc in &docs {
             if let Err(e) = idx.upsert(doc, &mut writer) {

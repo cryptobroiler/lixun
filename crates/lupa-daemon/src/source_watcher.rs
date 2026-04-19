@@ -120,7 +120,7 @@ pub async fn start(
 async fn reindex_apps(source: &Arc<AppsSource>, index: &Arc<RwLock<LupaIndex>>) -> Result<()> {
     let docs = source.index_all()?;
     let mut idx = index.write().await;
-    let mut writer = idx.writer(64_000_000)?;
+    let mut writer = idx.writer(32_000_000)?;
     for doc in &docs {
         idx.upsert(doc, &mut writer)?;
     }
@@ -130,16 +130,11 @@ async fn reindex_apps(source: &Arc<AppsSource>, index: &Arc<RwLock<LupaIndex>>) 
 }
 
 async fn reindex_attachments(
-    source: &Arc<ThunderbirdAttachmentsSource>,
-    index: &Arc<RwLock<LupaIndex>>,
+    _source: &Arc<ThunderbirdAttachmentsSource>,
+    _index: &Arc<RwLock<LupaIndex>>,
 ) -> Result<()> {
-    let docs = source.index_all()?;
-    let mut idx = index.write().await;
-    let mut writer = idx.writer(64_000_000)?;
-    for doc in &docs {
-        idx.upsert(doc, &mut writer)?;
-    }
-    idx.commit(&mut writer)?;
-    tracing::info!("Attachments watcher: reindexed {} attachments", docs.len());
+    tracing::info!(
+        "Attachments watcher: change detected, full reindex skipped to avoid reloading entire Thunderbird attachment corpus"
+    );
     Ok(())
 }

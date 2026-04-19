@@ -19,6 +19,7 @@ use history::ClickHistory;
 use query_log::QueryLog;
 
 use lupa_daemon::config;
+use lupa_daemon::hotkeys;
 use lupa_daemon::search_service::SearchService;
 use lupa_sources::Source;
 
@@ -34,6 +35,54 @@ struct IndexStats {
 #[derive(Debug, Clone, Default)]
 struct GuiState {
     visible: bool,
+    pid: Option<u32>,
+}
+
+fn process_alive(pid: u32) -> bool {
+    // Treat zombie (exited but not reaped) processes as NOT alive.
+    // kill(pid, 0) returns 0 even for zombies, so we also inspect /proc status.
+    let rc = unsafe { libc::kill(pid as i32, 0) };
+    let kill_said_alive = rc == 0
+        || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+    if !kill_said_alive {
+        return false;
+    }
+    let status_path = format!("/proc/{}/status", pid);
+    let Ok(status) = std::fs::read_to_string(&status_path) else {
+        return false;
+    };
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("State:") {
+            let trimmed = rest.trim_start();
+            if trimmed.starts_with('Z') || trimmed.starts_with('X') {
+                return false;
+            }
+            return true;
+        }
+    }
+    true
+}
+
+fn spawn_gui(
+    gui_state: Arc<RwLock<GuiState>>,
+) -> anyhow::Result<u32> {
+    let mut child = tokio::process::Command::new("lupa-gui").spawn()?;
+    let pid = child
+        .id()
+        .ok_or_else(|| anyhow::anyhow!("spawned lupa-gui has no pid"))?;
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+        let mut state = gui_state.write().await;
+        if state.pid == Some(pid) {
+            state.pid = None;
+            state.visible = false;
+        }
+    });
+    Ok(pid)
+}
+
+fn terminate_gui(pid: u32) {
+    let _ = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
 }
 
 fn pid_path() -> std::path::PathBuf {
@@ -105,6 +154,15 @@ async fn main() -> Result<()> {
     let query_log = Arc::new(RwLock::new(query_log));
 
     let gui_state = Arc::new(RwLock::new(GuiState::default()));
+
+    let global_toggle_rx = hotkeys::spawn_global_toggle_listener(shared_config.keybindings.global_toggle.clone()).await;
+    let mut global_toggle_rx = match global_toggle_rx {
+        Ok(rx) => Some(rx),
+        Err(e) => {
+            tracing::warn!("Global shortcut portal unavailable: {}", e);
+            None
+        }
+    };
 
     let search = SearchService::new(index);
 
@@ -207,8 +265,39 @@ async fn main() -> Result<()> {
         }
     });
 
+    #[allow(unreachable_code)]
     loop {
         tokio::select! {
+            _ = async {
+                if let Some(rx) = &mut global_toggle_rx {
+                    rx.recv().await
+                } else {
+                    futures::future::pending().await
+                }
+            } => {
+                let mut state = gui_state.write().await;
+                if let Some(pid) = state.pid
+                    && !process_alive(pid)
+                {
+                    state.pid = None;
+                    state.visible = false;
+                }
+                if state.visible {
+                    if let Some(pid) = state.pid {
+                        terminate_gui(pid);
+                    }
+                    state.pid = None;
+                    state.visible = false;
+                } else {
+                    match spawn_gui(Arc::clone(&gui_state)) {
+                        Ok(pid) => {
+                            state.pid = Some(pid);
+                            state.visible = true;
+                        }
+                        Err(e) => tracing::error!("Failed to spawn GUI from global shortcut: {}", e),
+                    }
+                }
+            }
             result = listener.accept() => {
                 let (stream, _) = match result {
                     Ok(v) => v,
@@ -242,11 +331,12 @@ async fn main() -> Result<()> {
                     tracing::error!("Failed to save query log: {}", e);
                 }
                 tracing::info!("Shutdown complete");
-                break;
+                std::process::exit(0);
             }
         }
     }
 
+    #[allow(unreachable_code)]
     Ok(())
 }
 
@@ -265,7 +355,7 @@ async fn run_incremental_indexer(
 
         if !docs.is_empty() || !deleted_ids.is_empty() {
             let mut idx = index.write().await;
-            let mut writer = idx.writer(128_000_000)?;
+            let mut writer = idx.writer(32_000_000)?;
 
             for doc in &docs {
                 idx.upsert(doc, &mut writer)?;
@@ -293,23 +383,19 @@ async fn run_incremental_indexer(
 
     // Other sources (apps, gloda, attachments)
     {
-        let all_docs = {
+        let indexed_sources: Vec<(&'static str, Vec<lupa_core::Document>)> = {
             let sources = config.build_sources()?;
-            let mut docs: Vec<(String, Vec<lupa_core::Document>)> = Vec::new();
+            let mut out = Vec::new();
             for source in &sources {
-                if source.name() == "filesystem" {
-                    continue;
-                }
-                let d = source.index_all()?;
-                docs.push((source.name().to_string(), d));
+                out.push((source.name(), source.index_all()?));
             }
-            docs
+            out
         };
 
-        for (name, docs) in &all_docs {
+        for (name, docs) in indexed_sources {
             let mut idx = index.write().await;
-            let mut writer = idx.writer(64_000_000)?;
-            for doc in docs {
+            let mut writer = idx.writer(32_000_000)?;
+            for doc in &docs {
                 idx.upsert(doc, &mut writer)?;
             }
             idx.commit(&mut writer)?;
@@ -334,7 +420,7 @@ async fn do_reindex(
 ) -> Result<usize, anyhow::Error> {
     let index = search.index();
     let mut idx = index.write().await;
-    let mut writer = idx.writer(128_000_000)?;
+    let mut writer = idx.writer(32_000_000)?;
     let mut count = 0;
 
     if paths.is_empty() {
@@ -418,18 +504,49 @@ async fn handle_client(
     let resp = match req {
         Request::Toggle => {
             let mut state = gui_state.write().await;
-            state.visible = !state.visible;
+            if let Some(pid) = state.pid
+                && !process_alive(pid)
+            {
+                state.pid = None;
+                state.visible = false;
+            }
+
+            if state.visible {
+                if let Some(pid) = state.pid {
+                    terminate_gui(pid);
+                }
+                state.pid = None;
+                state.visible = false;
+            } else {
+                let pid = spawn_gui(Arc::clone(&gui_state))?;
+                state.pid = Some(pid);
+                state.visible = true;
+            }
             Response::Visibility {
                 visible: state.visible,
             }
         }
         Request::Show => {
             let mut state = gui_state.write().await;
-            state.visible = true;
-            Response::Visibility { visible: true }
+            if let Some(pid) = state.pid
+                && !process_alive(pid)
+            {
+                state.pid = None;
+                state.visible = false;
+            }
+            if !state.visible {
+                let pid = spawn_gui(Arc::clone(&gui_state))?;
+                state.pid = Some(pid);
+                state.visible = true;
+            }
+            Response::Visibility { visible: state.visible }
         }
         Request::Hide => {
             let mut state = gui_state.write().await;
+            if let Some(pid) = state.pid {
+                terminate_gui(pid);
+            }
+            state.pid = None;
             state.visible = false;
             Response::Visibility { visible: false }
         }

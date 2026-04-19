@@ -7,6 +7,8 @@ fn test_default_config() {
     assert!(!cfg.roots.is_empty());
     assert!(cfg.max_file_size_mb > 0);
     assert!((cfg.ranking_apps - 1.3).abs() < 0.001);
+    assert_eq!(cfg.keybindings.close, "Escape");
+    assert_eq!(cfg.keybindings.global_toggle, "Super+space");
 }
 
 #[test]

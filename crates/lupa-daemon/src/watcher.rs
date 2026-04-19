@@ -53,7 +53,7 @@ pub async fn start(
 
         // Process batch
         let mut idx = index.write().await;
-        let mut writer = idx.writer(128_000_000)?;
+        let mut writer = idx.writer(32_000_000)?;
         let mut changes = 0;
 
         for event in events {

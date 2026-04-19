@@ -11,6 +11,7 @@ struct ConfigToml {
     max_file_size_mb: Option<u64>,
     extractor_timeout_secs: Option<u64>,
     ranking: Option<RankingToml>,
+    keybindings: Option<KeybindingsToml>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -19,6 +20,46 @@ struct RankingToml {
     files: Option<f32>,
     mail: Option<f32>,
     attachments: Option<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KeybindingsToml {
+    close: Option<String>,
+    primary_action: Option<String>,
+    secondary_action: Option<String>,
+    copy: Option<String>,
+    quick_look: Option<String>,
+    history_up: Option<String>,
+    next_result: Option<String>,
+    previous_result: Option<String>,
+    next_category: Option<String>,
+    previous_category: Option<String>,
+    filter_all: Option<String>,
+    filter_apps: Option<String>,
+    filter_files: Option<String>,
+    filter_mail: Option<String>,
+    filter_attachments: Option<String>,
+    global_toggle: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Keybindings {
+    pub close: String,
+    pub primary_action: String,
+    pub secondary_action: String,
+    pub copy: String,
+    pub quick_look: String,
+    pub history_up: String,
+    pub next_result: String,
+    pub previous_result: String,
+    pub next_category: String,
+    pub previous_category: String,
+    pub filter_all: String,
+    pub filter_apps: String,
+    pub filter_files: String,
+    pub filter_mail: String,
+    pub filter_attachments: String,
+    pub global_toggle: String,
 }
 
 pub struct Config {
@@ -30,6 +71,7 @@ pub struct Config {
     pub ranking_files: f32,
     pub ranking_mail: f32,
     pub ranking_attachments: f32,
+    pub keybindings: Keybindings,
     pub state_dir: PathBuf,
 }
 
@@ -41,6 +83,8 @@ impl Default for Config {
             exclude: vec![
                 ".cache".into(),
                 ".local/share/Trash".into(),
+                ".steam".into(),
+                ".var/app".into(),
                 "node_modules".into(),
                 "target".into(),
                 ".git".into(),
@@ -54,7 +98,31 @@ impl Default for Config {
             ranking_files: 1.2,
             ranking_mail: 1.0,
             ranking_attachments: 0.9,
+            keybindings: Keybindings::default(),
             state_dir: state_dir(),
+        }
+    }
+}
+
+impl Default for Keybindings {
+    fn default() -> Self {
+        Self {
+            close: "Escape".into(),
+            primary_action: "Return".into(),
+            secondary_action: "<Shift>Return".into(),
+            copy: "<Ctrl>c".into(),
+            quick_look: "space".into(),
+            history_up: "Up".into(),
+            next_result: "Down".into(),
+            previous_result: "Up".into(),
+            next_category: "<Ctrl>Down".into(),
+            previous_category: "<Ctrl>Up".into(),
+            filter_all: "<Ctrl>0".into(),
+            filter_apps: "<Ctrl>1".into(),
+            filter_files: "<Ctrl>2".into(),
+            filter_mail: "<Ctrl>3".into(),
+            filter_attachments: "<Ctrl>4".into(),
+            global_toggle: "Super+space".into(),
         }
     }
 }
@@ -94,6 +162,56 @@ impl Config {
                     cfg.ranking_attachments = v;
                 }
             }
+            if let Some(bindings) = parsed.keybindings {
+                if let Some(v) = bindings.close {
+                    cfg.keybindings.close = v;
+                }
+                if let Some(v) = bindings.primary_action {
+                    cfg.keybindings.primary_action = v;
+                }
+                if let Some(v) = bindings.secondary_action {
+                    cfg.keybindings.secondary_action = v;
+                }
+                if let Some(v) = bindings.copy {
+                    cfg.keybindings.copy = v;
+                }
+                if let Some(v) = bindings.quick_look {
+                    cfg.keybindings.quick_look = v;
+                }
+                if let Some(v) = bindings.history_up {
+                    cfg.keybindings.history_up = v;
+                }
+                if let Some(v) = bindings.next_result {
+                    cfg.keybindings.next_result = v;
+                }
+                if let Some(v) = bindings.previous_result {
+                    cfg.keybindings.previous_result = v;
+                }
+                if let Some(v) = bindings.next_category {
+                    cfg.keybindings.next_category = v;
+                }
+                if let Some(v) = bindings.previous_category {
+                    cfg.keybindings.previous_category = v;
+                }
+                if let Some(v) = bindings.filter_all {
+                    cfg.keybindings.filter_all = v;
+                }
+                if let Some(v) = bindings.filter_apps {
+                    cfg.keybindings.filter_apps = v;
+                }
+                if let Some(v) = bindings.filter_files {
+                    cfg.keybindings.filter_files = v;
+                }
+                if let Some(v) = bindings.filter_mail {
+                    cfg.keybindings.filter_mail = v;
+                }
+                if let Some(v) = bindings.filter_attachments {
+                    cfg.keybindings.filter_attachments = v;
+                }
+                if let Some(v) = bindings.global_toggle {
+                    cfg.keybindings.global_toggle = v;
+                }
+            }
         }
 
         Ok(cfg)
@@ -110,25 +228,17 @@ impl Config {
     pub fn build_sources(&self) -> Result<Vec<Box<dyn lupa_sources::Source>>> {
         let mut sources: Vec<Box<dyn lupa_sources::Source>> = Vec::new();
 
-        sources.push(Box::new(lupa_sources::fs::FsSource::new(
-            self.roots.clone(),
-            self.exclude.clone(),
-            self.max_file_size_mb,
-        )));
-
         sources.push(Box::new(lupa_sources::apps::AppsSource::new()));
 
         if let Some(profile) = lupa_sources::gloda::GlodaSource::find_profile() {
             sources.push(Box::new(lupa_sources::gloda::GlodaSource::new(
                 profile.clone(),
                 0,
+                250,
             )));
-            sources.push(Box::new(
-                lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource::new(
-                    profile,
-                    self.max_file_size_mb * 1024 * 1024,
-                ),
-            ));
+            // Full Thunderbird attachment indexing is disabled by default for now.
+            // It is too expensive for large mailboxes and was the main source of
+            // multi-GB memory peaks during startup and watcher-triggered reindexing.
         }
 
         Ok(sources)

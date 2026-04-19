@@ -57,6 +57,7 @@ where
 pub struct GlodaSource {
     pub profile_path: PathBuf,
     pub last_key: u64,
+    pub limit: u32,
 }
 
 impl GlodaSource {
@@ -66,6 +67,14 @@ impl GlodaSource {
         if !tb_path.exists() {
             return None;
         }
+
+        let profiles_ini = tb_path.join("profiles.ini");
+        if let Ok(content) = std::fs::read_to_string(&profiles_ini)
+            && let Some(path) = parse_profiles_ini_selected(&tb_path, &content)
+        {
+            return Some(path);
+        }
+
         for entry in std::fs::read_dir(&tb_path).ok()?.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.contains(".default") {
@@ -75,10 +84,11 @@ impl GlodaSource {
         None
     }
 
-    pub fn new(profile_path: PathBuf, last_key: u64) -> Self {
+    pub fn new(profile_path: PathBuf, last_key: u64, limit: u32) -> Self {
         Self {
             profile_path,
             last_key,
+            limit,
         }
     }
 
@@ -93,9 +103,120 @@ impl GlodaSource {
     }
 }
 
+fn parse_profiles_ini_selected(tb_path: &std::path::Path, content: &str) -> Option<PathBuf> {
+    #[derive(Default)]
+    struct ProfileSection {
+        path: Option<String>,
+        is_relative: bool,
+    }
+
+    let mut current_path: Option<String> = None;
+    let mut current_is_relative = true;
+    let mut current_default = false;
+    let mut selected_path: Option<String> = None;
+    let mut install_default_name: Option<String> = None;
+    let mut current_section: Option<String> = None;
+    let mut profiles: Vec<ProfileSection> = Vec::new();
+
+    let flush_section = |path: &mut Option<String>,
+                         is_relative: &mut bool,
+                         default: &mut bool,
+                         selected: &mut Option<String>,
+                         section: Option<&str>,
+                         all_profiles: &mut Vec<ProfileSection>| {
+        if let Some(p) = path.take() {
+            if section.is_some_and(|s| s.starts_with("Profile")) {
+                all_profiles.push(ProfileSection {
+                    path: Some(p.clone()),
+                    is_relative: *is_relative,
+                });
+            }
+            if *default {
+                let resolved = if *is_relative {
+                    tb_path.join(&p)
+                } else {
+                    PathBuf::from(&p)
+                };
+                *selected = Some(resolved.to_string_lossy().to_string());
+            }
+        }
+        *is_relative = true;
+        *default = false;
+    };
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            flush_section(
+                &mut current_path,
+                &mut current_is_relative,
+                &mut current_default,
+                &mut selected_path,
+                current_section.as_deref(),
+                &mut profiles,
+            );
+            current_section = Some(line[1..line.len() - 1].to_string());
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        match key.trim() {
+            "Path" => current_path = Some(value.trim().to_string()),
+            "IsRelative" => current_is_relative = value.trim() != "0",
+            "Default" if current_section
+                .as_deref()
+                .is_some_and(|s| s.starts_with("Profile")) => current_default = value.trim() == "1",
+            "Default" if current_section
+                .as_deref()
+                .is_some_and(|s| s.starts_with("Install")) =>
+            {
+                install_default_name = Some(value.trim().to_string())
+            }
+            _ => {}
+        }
+    }
+
+    flush_section(
+        &mut current_path,
+        &mut current_is_relative,
+        &mut current_default,
+        &mut selected_path,
+        current_section.as_deref(),
+        &mut profiles,
+    );
+
+    if let Some(default_name) = install_default_name.as_deref()
+        && let Some(profile) = profiles.iter().find(|p| p.path.as_deref() == Some(default_name))
+        && let Some(path) = profile.path.as_deref()
+    {
+        return Some(if profile.is_relative {
+            tb_path.join(path)
+        } else {
+            PathBuf::from(path)
+        });
+    }
+
+    if let Some(path) = selected_path {
+        return Some(PathBuf::from(path));
+    }
+
+    if let Some(default_name) = install_default_name {
+        let direct = tb_path.join(&default_name);
+        if direct.exists() {
+            return Some(direct);
+        }
+    }
+
+    None
+}
+
 /// Query messages from a Gloda connection. Extracted for testability against
 /// an in-memory rusqlite `Connection` seeded with the real Gloda schema.
-pub fn query_messages(conn: &Connection, last_key: u64) -> rusqlite::Result<Vec<Document>> {
+pub fn query_messages(conn: &Connection, last_key: u64, limit: u32) -> rusqlite::Result<Vec<Document>> {
     let mut stmt = conn.prepare(
         "SELECT m.id, m.messageKey, m.headerMessageID, \
                 mt.c1subject, mt.c3author, mt.c0body \
@@ -103,10 +224,10 @@ pub fn query_messages(conn: &Connection, last_key: u64) -> rusqlite::Result<Vec<
          LEFT JOIN messagesText_content mt ON m.id = mt.docid \
          WHERE m.id > ? AND m.deleted = 0 \
          ORDER BY m.id ASC \
-         LIMIT 10000",
+         LIMIT ?",
     )?;
 
-    let rows = stmt.query_map([last_key as i64], |row| {
+    let rows = stmt.query_map((last_key as i64, limit as i64), |row| {
         Ok((
             row.get::<_, i64>(0)?,
             row.get::<_, Option<i64>>(1)?,
@@ -171,7 +292,7 @@ impl crate::Source for GlodaSource {
 
         let result: rusqlite::Result<Vec<Document>> = with_busy_retry(|| {
             let conn = self.open_db()?;
-            let docs = query_messages(&conn, self.last_key)?;
+            let docs = query_messages(&conn, self.last_key, self.limit)?;
             Ok(docs)
         });
 
@@ -237,7 +358,7 @@ mod tests {
         )
         .unwrap();
 
-        let docs = query_messages(&conn, 0).unwrap();
+        let docs = query_messages(&conn, 0, 1000).unwrap();
         assert_eq!(docs.len(), 1);
         let d = &docs[0];
         assert_eq!(d.title, "Hello");
@@ -261,7 +382,7 @@ mod tests {
         )
         .unwrap();
 
-        let docs = query_messages(&conn, 0).unwrap();
+        let docs = query_messages(&conn, 0, 1000).unwrap();
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].id.0, "mail:1");
     }
@@ -277,7 +398,7 @@ mod tests {
         )
         .unwrap();
 
-        let docs = query_messages(&conn, 0).unwrap();
+        let docs = query_messages(&conn, 0, 1000).unwrap();
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].title, "(no subject)");
         assert!(docs[0].body.is_none());
@@ -294,7 +415,7 @@ mod tests {
         )
         .unwrap();
 
-        let docs = query_messages(&conn, 0).unwrap();
+        let docs = query_messages(&conn, 0, 1000).unwrap();
         assert_eq!(docs.len(), 1);
         match &docs[0].action {
             Action::OpenMail { message_id } => assert_eq!(message_id, "42"),
@@ -363,5 +484,28 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), 5);
         assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn parse_profiles_ini_prefers_install_default_when_present() {
+        let tb = PathBuf::from("/home/u/.thunderbird");
+        let ini = r#"[Profile1]
+Name=default
+IsRelative=1
+Path=nrfubs4x.default
+Default=1
+
+[InstallFDC34C9F024745EB]
+Default=f0b29pli.default-release
+Locked=1
+
+[Profile0]
+Name=default-release
+IsRelative=1
+Path=f0b29pli.default-release
+"#;
+
+        let parsed = parse_profiles_ini_selected(&tb, ini).unwrap();
+        assert_eq!(parsed, tb.join("f0b29pli.default-release"));
     }
 }

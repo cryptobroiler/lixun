@@ -33,6 +33,7 @@ libc = "0.2"
 signal-hook = "0.3"
 signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
 futures = "0.3"
+ashpd = { version = "0.13", features = ["tokio", "global_shortcuts"] }
 
 [dev-dependencies]
 tempfile = "3"
