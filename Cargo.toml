@@ -7,6 +7,7 @@ members = [
     "crates/lupa-sources",
     "crates/lupa-source-maildir",
     "crates/lupa-source-thunderbird",
+    "crates/lupa-plugin-bundle",
     "crates/lupa-indexer",
     "crates/lupa-daemon",
     "crates/lupa-gui",
@@ -54,5 +55,8 @@ num_cpus = "1.16"
 
 # Text
 regex = "1"
+
+# Compile-time plugin registration
+inventory = "0.3"
 
 tempfile = "3"

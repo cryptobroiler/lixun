@@ -90,15 +90,28 @@ pub struct PluginInstance {
 
 /// Config-driven registration of opt-in source plugins.
 ///
-/// Daemon startup iterates over `plugin_factories()` and, for each factory
-/// whose `section()` matches a top-level key in the user's config, calls
-/// `build()` with the raw TOML subtree. Absent sections are skipped — the
+/// Daemon startup iterates over all `PluginFactoryEntry` values registered
+/// via `inventory::submit!` across the workspace. For each factory whose
+/// `section()` matches a top-level key in the user's config, `build()` is
+/// called with the raw TOML subtree. Absent sections are skipped — the
 /// factory never sees a `None`.
 pub trait PluginFactory: Send + Sync {
     fn section(&self) -> &'static str;
 
     fn build(&self, raw: &toml::Value, ctx: &PluginBuildContext) -> Result<Vec<PluginInstance>>;
 }
+
+/// Compile-time plugin registration slot.
+///
+/// Each plugin crate submits one of these via `inventory::submit!` at
+/// crate root. The daemon enumerates all submitted entries at startup
+/// via `inventory::iter::<PluginFactoryEntry>` — no plugin names in
+/// daemon code.
+pub struct PluginFactoryEntry {
+    pub new: fn() -> Box<dyn PluginFactory>,
+}
+
+inventory::collect!(PluginFactoryEntry);
 
 #[cfg(test)]
 mod tests {

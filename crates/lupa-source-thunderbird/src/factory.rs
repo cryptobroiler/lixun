@@ -1,9 +1,13 @@
 use crate::{GlodaSource, ThunderbirdAttachmentsSource};
 use anyhow::{bail, Result};
-use lupa_sources::{PluginBuildContext, PluginFactory, PluginInstance};
+use lupa_sources::{PluginBuildContext, PluginFactory, PluginFactoryEntry, PluginInstance};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+lupa_sources::inventory::submit! {
+    PluginFactoryEntry { new: || Box::new(ThunderbirdFactory) }
+}
 
 #[derive(Debug, Deserialize)]
 struct ThunderbirdSectionToml {

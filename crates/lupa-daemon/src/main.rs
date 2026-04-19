@@ -612,10 +612,10 @@ async fn handle_client(
 }
 
 fn plugin_factories() -> Vec<Box<dyn lupa_sources::PluginFactory>> {
-    vec![
-        Box::new(lupa_source_maildir::MaildirFactory),
-        Box::new(lupa_source_thunderbird::ThunderbirdFactory),
-    ]
+    lupa_sources::inventory::iter::<lupa_sources::PluginFactoryEntry>
+        .into_iter()
+        .map(|entry| (entry.new)())
+        .collect()
 }
 
 fn register_builtin_sources(

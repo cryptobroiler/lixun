@@ -10,7 +10,8 @@ pub mod manifest;
 pub mod mime_icons;
 pub mod source;
 
+pub use inventory;
 pub use source::{
-    IndexerSource, Mutation, MutationSink, PluginBuildContext, PluginFactory, PluginInstance,
-    SourceContext, SourceEvent, SourceEventKind, WatchSpec,
+    IndexerSource, Mutation, MutationSink, PluginBuildContext, PluginFactory, PluginFactoryEntry,
+    PluginInstance, SourceContext, SourceEvent, SourceEventKind, WatchSpec,
 };
