@@ -25,6 +25,7 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 notify.workspace = true
+walkdir.workspace = true
 bytes.workspace = true
 rayon.workspace = true
 dirs = "5"
@@ -33,6 +34,7 @@ libc = "0.2"
 signal-hook = "0.3"
 signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
 futures = "0.3"
+async-channel = "2"
 ashpd = { version = "0.13", features = ["tokio", "global_shortcuts"] }
 
 # jemalloc: bounds VmPeak on a long-lived daemon by aggressively returning
