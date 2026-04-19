@@ -44,6 +44,8 @@ pub enum Action {
     Launch {
         exec: String,
         terminal: bool,
+        desktop_id: Option<String>,
+        desktop_file: Option<PathBuf>,
         working_dir: Option<PathBuf>,
     },
     /// Open a file with the default handler.
@@ -155,6 +157,8 @@ mod tests {
             Action::Launch {
                 exec: "firefox".to_string(),
                 terminal: false,
+                desktop_id: Some("firefox.desktop".to_string()),
+                desktop_file: Some(PathBuf::from("/usr/share/applications/firefox.desktop")),
                 working_dir: None,
             },
             Action::OpenFile {

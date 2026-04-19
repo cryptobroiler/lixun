@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 struct DesktopEntry {
     pub desktop_id: String,
+    pub desktop_file: PathBuf,
     pub name: String,
     pub exec: String,
     pub terminal: bool,
@@ -45,6 +46,11 @@ impl AppsSource {
         }
 
         Self { search_dirs: dirs }
+    }
+
+    fn desktop_id_from_path(path: &Path) -> Option<String> {
+        let stem = path.file_stem()?.to_string_lossy();
+        Some(format!("{}.desktop", stem))
     }
 
     fn parse_desktop_file(path: &Path) -> Option<DesktopEntry> {
@@ -114,13 +120,14 @@ impl AppsSource {
             return None;
         }
 
-        let desktop_id = path.file_stem()?.to_string_lossy().to_string();
+        let desktop_id = Self::desktop_id_from_path(path)?;
         let subtitle = generic_name
             .or(comment)
             .unwrap_or_else(|| desktop_id.clone());
 
         Some(DesktopEntry {
             desktop_id,
+            desktop_file: path.to_path_buf(),
             name,
             exec,
             terminal,
@@ -171,6 +178,8 @@ impl crate::Source for AppsSource {
                         action: Action::Launch {
                             exec: entry.exec,
                             terminal: entry.terminal,
+                            desktop_id: Some(entry.desktop_id.clone()),
+                            desktop_file: Some(entry.desktop_file.clone()),
                             working_dir: entry.working_dir,
                         },
                         extract_fail: false,
@@ -210,7 +219,7 @@ Terminal=false
         assert!(result.is_some());
 
         let entry = result.unwrap();
-        assert_eq!(entry.desktop_id, "firefox");
+        assert_eq!(entry.desktop_id, "firefox.desktop");
         assert_eq!(entry.name, "Firefox");
         assert_eq!(entry.exec, "/usr/bin/firefox");
         assert!(!entry.terminal);
@@ -287,7 +296,7 @@ Exec=/usr/bin/fallback
             AppsSource::parse_desktop_file(&fallback_path)
                 .unwrap()
                 .subtitle,
-            "desktop-id"
+            "desktop-id.desktop"
         );
     }
 

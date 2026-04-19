@@ -2,6 +2,8 @@
 //! open mail, open attachment, copy to clipboard.
 
 use anyhow::Result;
+use gtk::gio;
+use gio::prelude::*;
 use gtk::prelude::*;
 use lupa_core::{Action, Hit};
 
@@ -49,8 +51,25 @@ pub(crate) fn execute_action(hit: &Hit) -> Result<()> {
         Action::Launch {
             exec,
             terminal,
+            desktop_id,
+            desktop_file,
             working_dir,
         } => {
+            if !terminal {
+                if let Some(id) = desktop_id.as_deref()
+                    && let Some(app) = gio::DesktopAppInfo::new(id)
+                {
+                    app.launch(&[], None::<&gio::AppLaunchContext>)?;
+                    return Ok(());
+                }
+                if let Some(path) = desktop_file.as_ref()
+                    && let Some(app) = gio::DesktopAppInfo::from_filename(path)
+                {
+                    app.launch(&[], None::<&gio::AppLaunchContext>)?;
+                    return Ok(());
+                }
+            }
+
             if *terminal {
                 let mut args: Vec<&str> = vec!["-e"];
                 args.extend(exec.split_whitespace());
@@ -94,8 +113,7 @@ pub(crate) fn execute_action(hit: &Hit) -> Result<()> {
         }
         Action::OpenMail { message_id } => {
             std::process::Command::new("thunderbird")
-                .arg("-message")
-                .arg(message_id)
+                .arg(format!("mid:{}", message_id))
                 .spawn()?;
             Ok(())
         }
@@ -107,39 +125,13 @@ pub(crate) fn execute_action(hit: &Hit) -> Result<()> {
             encoding,
             suggested_filename,
         } => {
-            use std::io::{Read, Seek, SeekFrom};
-            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-
-            let xdg_dir_str = std::env::var("XDG_RUNTIME_DIR").ok();
-            let xdg_dir = xdg_dir_str.as_ref().map(std::path::Path::new);
-            let runtime_dir = secure_runtime_dir_from_env(xdg_dir)?;
-            let dir = runtime_dir.join("lupa/attachments");
-            std::fs::create_dir_all(&dir)?;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-
-            sweep_stale_attachments(&dir, std::time::Duration::from_secs(600));
-
-            let mut f = std::fs::File::open(mbox_path)?;
-            f.seek(SeekFrom::Start(*byte_offset))?;
-            let mut raw = vec![0u8; *length as usize];
-            f.read_exact(&mut raw)?;
-
-            let decoded = decode_attachment(&raw, encoding)?;
-
-            let safe = sanitize_filename(suggested_filename);
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            let target = dir.join(format!("{ts}-{safe}"));
-            {
-                let mut file = std::fs::OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .mode(0o600)
-                    .open(&target)?;
-                std::io::Write::write_all(&mut file, &decoded)?;
-            }
+            let target = extract_attachment_to_temp(
+                mbox_path,
+                *byte_offset,
+                *length,
+                encoding,
+                suggested_filename,
+            )?;
             std::process::Command::new("xdg-open")
                 .arg(&target)
                 .spawn()?;
@@ -147,8 +139,7 @@ pub(crate) fn execute_action(hit: &Hit) -> Result<()> {
         }
         Action::OpenParentMail { message_id } => {
             std::process::Command::new("thunderbird")
-                .arg("-message")
-                .arg(message_id)
+                .arg(format!("mid:{}", message_id))
                 .spawn()?;
             Ok(())
         }
@@ -218,9 +209,8 @@ pub(crate) fn quick_look(hit: &Hit) -> Result<()> {
             .arg(&preview_path)
             .spawn()?;
     } else {
-        std::process::Command::new("xdg-open")
-            .arg(&preview_path)
-            .spawn()?;
+        let uri = gio::File::for_path(&preview_path).uri();
+        gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>)?;
     }
     Ok(())
 }
