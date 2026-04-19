@@ -15,13 +15,13 @@ conflicts=("lupa")
 
 # Local tarball — replace with release URL for distribution:
 # source=("https://repo.dkp.hk/lupa/lupa-${pkgver}-x86_64.tar.gz")
-source=("lupa-${pkgver}-x86_64.tar.gz::file:///home/cryptobroiler/Developer/lupa/packaging/arch/releases/lupa-${pkgver}-x86_64.tar.gz")
-md5sums=("SKIP")
+source=("lupa-${pkgver}-x86_64.tar.gz::file:///home/cryptobroiler/Developer/lupa/packaging/arch/lupa-${pkgver}-x86_64.tar.gz" "systemd-lupad.service" "lupa.desktop")
+md5sums=("SKIP" "SKIP" "SKIP")
 
 package() {
   install -Dm755 "lupad" "$pkgdir/usr/bin/lupad"
   install -Dm755 "lupa" "$pkgdir/usr/bin/lupa"
   install -Dm755 "lupa-gui" "$pkgdir/usr/bin/lupa-gui"
-  install -Dm644 "${srcdir}/../systemd/lupad.service" "$pkgdir/usr/lib/systemd/user/lupad.service"
-  install -Dm644 "${srcdir}/../desktop/lupa.desktop" "$pkgdir/usr/share/applications/lupa.desktop"
+  install -Dm644 "${srcdir}/systemd-lupad.service" "$pkgdir/usr/lib/systemd/user/lupad.service"
+  install -Dm644 "${srcdir}/lupa.desktop" "$pkgdir/usr/share/applications/lupa.desktop"
 }
