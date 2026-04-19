@@ -132,6 +132,8 @@ impl crate::Source for ThunderbirdAttachmentsSource {
                         extract_fail,
                         sender: None,
                         recipients: None,
+                        source_instance: "builtin:tb_attachments".into(),
+                        extra: Vec::new(),
                     });
                 }
             }

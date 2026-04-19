@@ -371,5 +371,7 @@ pub fn index_file(path: &std::path::Path, max_file_size_mb: u64) -> Result<Docum
         extract_fail,
         sender: None,
         recipients: None,
+        source_instance: "builtin:fs".into(),
+        extra: Vec::new(),
     })
 }

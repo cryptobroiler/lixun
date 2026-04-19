@@ -416,6 +416,8 @@ mod tests {
             extract_fail: false,
             sender: None,
             recipients: None,
+            source_instance: "test".into(),
+            extra: Vec::new(),
         }
     }
 

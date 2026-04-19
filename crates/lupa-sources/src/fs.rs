@@ -105,6 +105,8 @@ impl FsSource {
             sender: None,
             recipients: None,
             extract_fail,
+            source_instance: "builtin:fs".into(),
+            extra: Vec::new(),
         }
     }
 

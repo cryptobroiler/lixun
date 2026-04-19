@@ -67,6 +67,11 @@ pub enum Action {
     OpenParentMail { message_id: String },
     /// Replace the current search query with this text (used for recent-query hits).
     ReplaceQuery { q: String },
+    /// Execute an arbitrary command. Generic escape hatch for plugin sources.
+    Exec {
+        cmdline: Vec<String>,
+        working_dir: Option<PathBuf>,
+    },
 }
 
 /// A search result.
@@ -109,6 +114,55 @@ pub struct Document {
     pub sender: Option<String>,
     /// Email `To` + `Cc` joined by `, `. `None` for non-mail documents.
     pub recipients: Option<String>,
+    /// Framework-set (NOT plugin-set): identifier of the source instance.
+    /// Used to purge all docs from a removed/disabled source instance.
+    pub source_instance: String,
+    pub extra: Vec<ExtraFieldValue>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExtraFieldValue {
+    pub field: &'static str,
+    pub value: PluginValue,
+}
+
+#[derive(Debug, Clone)]
+pub enum PluginValue {
+    Text(String),
+    I64(i64),
+    U64(u64),
+    Bool(bool),
+}
+
+/// Declaration of a plugin-owned tantivy field.
+/// Plugins return `&'static [PluginFieldSpec]` from `Source::extra_fields()`.
+#[derive(Debug, Clone, Copy)]
+pub struct PluginFieldSpec {
+    /// Globally unique across all enabled kinds. Convention: `<kind>_<short>`.
+    pub schema_name: &'static str,
+    /// User-facing alias for `field:value` queries. `Some("folder")` lets `folder:Inbox` work.
+    pub query_alias: Option<&'static str>,
+    pub ty: PluginFieldType,
+    pub stored: bool,
+    /// If true, field is included in default (unqualified) QueryParser with `boost`.
+    pub default_search: bool,
+    pub boost: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginFieldType {
+    Text { tokenizer: TextTokenizer },
+    Keyword,
+    I64,
+    U64,
+    Bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextTokenizer {
+    Default,
+    Raw,
+    Spotlight,
 }
 
 /// Search query.
@@ -182,6 +236,10 @@ mod tests {
                 encoding: "base64".to_string(),
                 suggested_filename: "test.pdf".to_string(),
             },
+            Action::Exec {
+                cmdline: vec!["neomutt".into(), "-f".into(), "/home/me/Mail".into()],
+                working_dir: Some(PathBuf::from("/home/me")),
+            },
         ];
 
         for action in actions {
@@ -227,6 +285,19 @@ mod tests {
                     assert_eq!(mi1, mi2);
                     assert_eq!(en1, en2);
                     assert_eq!(sf1, sf2);
+                }
+                (
+                    Action::Exec {
+                        cmdline: c1,
+                        working_dir: wd1,
+                    },
+                    Action::Exec {
+                        cmdline: c2,
+                        working_dir: wd2,
+                    },
+                ) => {
+                    assert_eq!(c1, c2);
+                    assert_eq!(wd1, wd2);
                 }
                 _ => panic!("Action variant mismatch"),
             }

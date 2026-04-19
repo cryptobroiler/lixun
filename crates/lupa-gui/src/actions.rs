@@ -144,6 +144,21 @@ pub(crate) fn execute_action(hit: &Hit) -> Result<()> {
             Ok(())
         }
         Action::ReplaceQuery { .. } => Ok(()),
+        Action::Exec {
+            cmdline,
+            working_dir,
+        } => {
+            let Some((program, args)) = cmdline.split_first() else {
+                anyhow::bail!("Action::Exec has empty cmdline");
+            };
+            let mut cmd = std::process::Command::new(program);
+            cmd.args(args);
+            if let Some(dir) = working_dir {
+                cmd.current_dir(dir);
+            }
+            cmd.spawn()?;
+            Ok(())
+        }
     }
 }
 

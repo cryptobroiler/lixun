@@ -185,6 +185,8 @@ impl crate::Source for AppsSource {
                         extract_fail: false,
                         sender: None,
                         recipients: None,
+                        source_instance: "builtin:apps".into(),
+                        extra: Vec::new(),
                     });
                 }
             }
