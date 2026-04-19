@@ -13,11 +13,13 @@ pub struct WatchSpec {
     pub recursive: bool,
 }
 
+#[derive(Clone, Debug)]
 pub struct SourceEvent {
     pub path: PathBuf,
     pub kind: SourceEventKind,
 }
 
+#[derive(Clone, Debug)]
 pub enum SourceEventKind {
     Created,
     Modified,
@@ -60,6 +62,15 @@ pub trait IndexerSource: Send + Sync {
     }
 
     fn reindex_full(&self, ctx: &SourceContext, sink: &dyn MutationSink) -> Result<()>;
+
+    /// Whether this source should participate in the daemon-driven full
+    /// reindex after a schema wipe. Return `false` for sources whose
+    /// `reindex_full` is too expensive to run unattended (e.g. multi-minute
+    /// full mbox scans). Such sources are expected to be reindexed on
+    /// explicit user request (`lupa reindex`) only.
+    fn reindex_on_schema_wipe(&self) -> bool {
+        true
+    }
 
     fn extra_fields(&self) -> &'static [PluginFieldSpec] {
         &[]

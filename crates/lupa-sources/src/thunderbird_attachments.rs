@@ -166,6 +166,23 @@ impl crate::source::IndexerSource for ThunderbirdAttachmentsSource {
         Ok(out)
     }
 
+    fn on_fs_events(
+        &self,
+        _ctx: &crate::source::SourceContext,
+        events: &[crate::source::SourceEvent],
+        _sink: &dyn crate::source::MutationSink,
+    ) -> Result<()> {
+        tracing::info!(
+            "attachments: {} fs event(s) observed; no-op (full reindex requires explicit `lupa reindex`)",
+            events.len()
+        );
+        Ok(())
+    }
+
+    fn reindex_on_schema_wipe(&self) -> bool {
+        false
+    }
+
     fn reindex_full(
         &self,
         ctx: &crate::source::SourceContext,

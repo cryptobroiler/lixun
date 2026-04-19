@@ -25,7 +25,7 @@ use lupa_daemon::hotkeys;
 use lupa_daemon::index_service::{self, IndexMutationTx, SearchHandle};
 use lupa_daemon::indexer;
 
-use lupa_indexer::source_watcher;
+use lupa_indexer::plugin_fs_watcher;
 use lupa_indexer::watcher;
 
 #[derive(Debug, Clone, Default)]
@@ -227,57 +227,14 @@ async fn main() -> Result<()> {
         std::mem::forget(tick_handles);
     }
 
-    if !rebuilt_from_scratch {
-        for inst in &registry.instances {
-            if inst.source.kind() == "maildir" {
-                let instance_id = inst.instance_id.clone();
-                let state_dir_inst = inst.state_dir.clone();
-                let source = inst.source.clone();
-                let sink_for_task = indexer_sink.clone();
-                tokio::spawn(async move {
-                    let result = tokio::task::spawn_blocking(move || {
-                        let ctx = lupa_sources::source::SourceContext {
-                            instance_id: &instance_id,
-                            state_dir: &state_dir_inst,
-                        };
-                        source.reindex_full(&ctx, sink_for_task.as_ref())
-                    })
-                    .await;
-                    match result {
-                        Ok(Ok(())) => tracing::info!("maildir warm-start reindex complete"),
-                        Ok(Err(e)) => tracing::warn!("maildir warm-start reindex failed: {}", e),
-                        Err(e) => tracing::error!("maildir warm-start task panicked: {}", e),
-                    }
-                });
-            }
-        }
-    }
-
-    let profile = lupa_sources::gloda::GlodaSource::find_profile();
-    if profile.is_some() {
-        let apps = Arc::new(lupa_sources::apps::AppsSource::new());
-        let attachments = Arc::new(
-            lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource::new(
-                profile.clone().unwrap(),
-                shared_config.max_file_size_mb * 1024 * 1024,
-            ),
-        );
-        let sw_mutation = mutation_tx.clone();
+    {
+        let pfw_registry = Arc::clone(&registry);
+        let pfw_sink = indexer_sink.clone();
         tokio::spawn(async move {
-            if let Err(e) = source_watcher::start(apps, Some(attachments), sw_mutation).await {
-                tracing::error!("Source watcher error: {}", e);
+            if let Err(e) = plugin_fs_watcher::start(pfw_registry, pfw_sink).await {
+                tracing::error!("plugin fs watcher error: {}", e);
             }
         });
-        tracing::info!("Apps + attachments watchers started");
-    } else {
-        let apps = Arc::new(lupa_sources::apps::AppsSource::new());
-        let sw_mutation = mutation_tx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = source_watcher::start(apps, None, sw_mutation).await {
-                tracing::error!("Source watcher error: {}", e);
-            }
-        });
-        tracing::info!("Apps watcher started (no Thunderbird profile)");
     }
 
     let socket_path = socket_path();
@@ -669,7 +626,17 @@ fn register_builtin_sources(
         registry.register(
             "builtin:gloda".into(),
             state_dir_root,
-            Arc::new(lupa_sources::gloda::GlodaSource::new(profile, 0, 250)),
+            Arc::new(lupa_sources::gloda::GlodaSource::new(profile.clone(), 0, 250)),
+        );
+        registry.register(
+            "builtin:tb_attachments".into(),
+            state_dir_root,
+            Arc::new(
+                lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource::new(
+                    profile,
+                    config.max_file_size_mb * 1024 * 1024,
+                ),
+            ),
         );
     }
 

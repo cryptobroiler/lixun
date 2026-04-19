@@ -1,8 +1,8 @@
 pub mod cursors;
 pub mod index_service;
 pub mod indexer;
+pub mod plugin_fs_watcher;
 pub mod registry;
-pub mod source_watcher;
 pub mod sources_api;
 pub mod tick_scheduler;
 pub mod watcher;

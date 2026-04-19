@@ -205,6 +205,13 @@ async fn reindex_non_fs_from_registry(
         if inst.source.kind() == "fs" {
             continue;
         }
+        if !inst.source.reindex_on_schema_wipe() {
+            tracing::info!(
+                "Source instance {} opts out of schema-wipe reindex (explicit `lupa reindex` required)",
+                inst.instance_id
+            );
+            continue;
+        }
         let instance_id = inst.instance_id.clone();
         let state_dir = inst.state_dir.clone();
         let source = Arc::clone(&inst.source);
