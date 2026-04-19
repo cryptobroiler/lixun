@@ -139,10 +139,13 @@ async fn main() -> Result<()> {
     ));
 
     let index_path = config.state_dir.join("index");
-    let mut registry = lupa_indexer::SourceRegistry::new();
-    let sources_state_dir = config.state_dir.join("sources");
-    register_builtin_sources(&mut registry, &config, &sources_state_dir);
-    let index = lupa_index::LupaIndex::create_or_open_with_plugins(
+    let registry = {
+        let mut r = lupa_indexer::SourceRegistry::new();
+        let sources_state_dir = config.state_dir.join("sources");
+        register_builtin_sources(&mut r, &config, &sources_state_dir);
+        Arc::new(r)
+    };
+    let (index, rebuilt_from_scratch) = lupa_index::LupaIndex::create_or_open_with_plugins(
         index_path.to_str().unwrap(),
         &registry.plugin_fields_by_kind,
     )?;
@@ -182,6 +185,7 @@ async fn main() -> Result<()> {
     let indexer_stats = Arc::clone(&stats);
     let indexer_state_dir = state_dir.clone();
     let indexer_config = Arc::clone(&shared_config);
+    let indexer_registry = Arc::clone(&registry);
     tokio::spawn(async move {
         if let Err(e) = run_incremental_indexer(
             indexer_mutation,
@@ -189,6 +193,8 @@ async fn main() -> Result<()> {
             indexer_stats,
             indexer_state_dir,
             indexer_config,
+            indexer_registry,
+            rebuilt_from_scratch,
         )
         .await
         {
@@ -221,27 +227,29 @@ async fn main() -> Result<()> {
         std::mem::forget(tick_handles);
     }
 
-    for inst in &registry.instances {
-        if inst.source.kind() == "maildir" {
-            let instance_id = inst.instance_id.clone();
-            let state_dir_inst = inst.state_dir.clone();
-            let source = inst.source.clone();
-            let sink_for_task = indexer_sink.clone();
-            tokio::spawn(async move {
-                let result = tokio::task::spawn_blocking(move || {
-                    let ctx = lupa_sources::source::SourceContext {
-                        instance_id: &instance_id,
-                        state_dir: &state_dir_inst,
-                    };
-                    source.reindex_full(&ctx, sink_for_task.as_ref())
-                })
-                .await;
-                match result {
-                    Ok(Ok(())) => tracing::info!("maildir initial reindex_full complete"),
-                    Ok(Err(e)) => tracing::warn!("maildir reindex_full failed: {}", e),
-                    Err(e) => tracing::error!("maildir reindex_full task panicked: {}", e),
-                }
-            });
+    if !rebuilt_from_scratch {
+        for inst in &registry.instances {
+            if inst.source.kind() == "maildir" {
+                let instance_id = inst.instance_id.clone();
+                let state_dir_inst = inst.state_dir.clone();
+                let source = inst.source.clone();
+                let sink_for_task = indexer_sink.clone();
+                tokio::spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        let ctx = lupa_sources::source::SourceContext {
+                            instance_id: &instance_id,
+                            state_dir: &state_dir_inst,
+                        };
+                        source.reindex_full(&ctx, sink_for_task.as_ref())
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok(())) => tracing::info!("maildir warm-start reindex complete"),
+                        Ok(Err(e)) => tracing::warn!("maildir warm-start reindex failed: {}", e),
+                        Err(e) => tracing::error!("maildir warm-start task panicked: {}", e),
+                    }
+                });
+            }
         }
     }
 
@@ -352,9 +360,10 @@ async fn main() -> Result<()> {
                 let stats = Arc::clone(&stats);
                 let gui_state = Arc::clone(&gui_state);
                 let shared_config = Arc::clone(&shared_config);
+                let client_registry = Arc::clone(&registry);
 
                 tokio::spawn(async move {
-                    if let Err(e) = handle_client(stream, search, mutation_tx, history, query_log, stats, gui_state, shared_config).await {
+                    if let Err(e) = handle_client(stream, search, mutation_tx, history, query_log, stats, gui_state, shared_config, client_registry).await {
                         tracing::debug!("Client error: {}", e);
                     }
                 });
@@ -386,9 +395,18 @@ async fn run_incremental_indexer(
     stats: Arc<RwLock<IndexStats>>,
     state_dir: std::path::PathBuf,
     config: Arc<config::Config>,
+    registry: Arc<lupa_indexer::SourceRegistry>,
+    rebuilt_from_scratch: bool,
 ) -> Result<()> {
-    let (fs_count, other_count) =
-        indexer::run_incremental(&mutation_tx, &search, config.as_ref(), &state_dir).await?;
+    let (fs_count, other_count) = indexer::run_incremental(
+        &mutation_tx,
+        &search,
+        config.as_ref(),
+        registry.as_ref(),
+        &state_dir,
+        rebuilt_from_scratch,
+    )
+    .await?;
     let total = fs_count + other_count;
     if total > 0 {
         let mut stats_lock = stats.write().await;
@@ -402,11 +420,12 @@ async fn do_reindex(
     mutation_tx: &IndexMutationTx,
     stats: &Arc<RwLock<IndexStats>>,
     config: &config::Config,
+    registry: &lupa_indexer::SourceRegistry,
     state_dir: &std::path::Path,
     paths: Vec<std::path::PathBuf>,
 ) -> Result<usize, anyhow::Error> {
     let count = if paths.is_empty() {
-        indexer::reindex_full(mutation_tx, config, state_dir)
+        indexer::reindex_full(mutation_tx, config, registry, state_dir)
             .await?
             .total_docs
     } else {
@@ -479,6 +498,7 @@ async fn handle_client(
     stats: Arc<RwLock<IndexStats>>,
     gui_state: Arc<RwLock<GuiState>>,
     config: Arc<config::Config>,
+    registry: Arc<lupa_indexer::SourceRegistry>,
 ) -> anyhow::Result<()> {
     let mut header = [0u8; 4];
     stream.read_exact(&mut header).await?;
@@ -576,7 +596,7 @@ async fn handle_client(
             Err(e) => Response::Error(e.to_string()),
         },
         Request::Reindex { paths } => {
-            let result = do_reindex(&mutation_tx, &stats, &config, &config.state_dir, paths).await;
+            let result = do_reindex(&mutation_tx, &stats, &config, registry.as_ref(), &config.state_dir, paths).await;
             match result {
                 Ok(_count) => {
                     let s = stats.read().await;

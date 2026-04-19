@@ -43,7 +43,8 @@ async fn reindex_full_rebuilds_manifest_and_drops_phantom_entries() {
     let (mutation_tx, _search, _writer_handle) = spawn_writer_service(index).unwrap();
 
     let config = test_config(root.clone(), state_dir.clone());
-    let outcome = indexer::reindex_full(&mutation_tx, &config, &state_dir)
+    let registry = lupa_indexer::SourceRegistry::new();
+    let outcome = indexer::reindex_full(&mutation_tx, &config, &registry, &state_dir)
         .await
         .unwrap();
 

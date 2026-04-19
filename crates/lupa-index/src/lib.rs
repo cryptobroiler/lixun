@@ -126,13 +126,21 @@ pub struct LupaIndex {
 
 impl LupaIndex {
     pub fn create_or_open(index_path: &str) -> Result<Self> {
-        Self::create_or_open_with_plugins(index_path, &BTreeMap::new())
+        Self::create_or_open_with_plugins(index_path, &BTreeMap::new()).map(|(index, _)| index)
     }
 
+    /// Open or create the index.
+    ///
+    /// Returns `(index, rebuilt_from_scratch)`. `rebuilt_from_scratch` is
+    /// `true` when the on-disk directory was missing or wiped (INDEX_VERSION
+    /// change, schema fingerprint change, or missing meta.json). The daemon
+    /// uses this flag to decide whether to re-emit every non-fs source's
+    /// `reindex_full` on startup; when `false`, sources catch up via
+    /// `on_fs_events` / `on_tick` instead.
     pub fn create_or_open_with_plugins(
         index_path: &str,
         plugin_fields_by_kind: &BTreeMap<&'static str, &'static [PluginFieldSpec]>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, bool)> {
         let (schema, plugins) = LupaSchema::build_with_plugins(plugin_fields_by_kind)?;
         let index_dir = PathBuf::from(index_path);
         let version_path = index_dir.join(INDEX_VERSION_FILE);
@@ -169,11 +177,14 @@ impl LupaIndex {
 
         tokenizer::register_spotlight_tokenizer(&index);
 
-        Ok(Self {
-            index,
-            schema,
-            plugins,
-        })
+        Ok((
+            Self {
+                index,
+                schema,
+                plugins,
+            },
+            needs_rebuild,
+        ))
     }
 
     /// Upsert a document (delete by id, then insert).

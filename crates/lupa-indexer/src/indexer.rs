@@ -3,13 +3,18 @@
 
 use anyhow::Result;
 use lupa_core::Document;
-use lupa_sources::manifest::Manifest;
 use lupa_sources::Source;
+use lupa_sources::manifest::Manifest;
+use lupa_sources::source::{Mutation as SourceMutation, MutationSink, SourceContext};
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::index_service::{IndexMutationTx, Mutation, SearchHandle};
+use crate::registry::SourceRegistry;
 use crate::sources_api::IndexerSources;
+use crate::writer_sink::WriterSink;
 
 pub struct ReindexOutcome {
     pub total_docs: usize,
@@ -20,6 +25,7 @@ pub struct ReindexOutcome {
 pub async fn reindex_full(
     mutation_tx: &IndexMutationTx,
     config: &dyn IndexerSources,
+    registry: &SourceRegistry,
     state_dir: &Path,
 ) -> Result<ReindexOutcome> {
     let state_dir_owned = state_dir.to_path_buf();
@@ -58,22 +64,7 @@ pub async fn reindex_full(
         fs_count
     };
 
-    let indexed_sources: Vec<(&'static str, Vec<Document>)> = {
-        let sources = config.build_sources()?;
-        let mut out = Vec::new();
-        for source in &sources {
-            tracing::info!("Reindexing source: {}", source.name());
-            out.push((source.name(), source.index_all()?));
-        }
-        out
-    };
-    let mut other_count = 0usize;
-    for (name, docs) in indexed_sources {
-        other_count += docs.len();
-        mutation_tx.send(Mutation::UpsertMany(docs)).await?;
-        let _ = mutation_tx.barrier().await?;
-        tracing::info!("Source {} indexed", name);
-    }
+    let other_count = reindex_non_fs_from_registry(mutation_tx, registry).await?;
     mutation_tx.commit_now().await?;
 
     tracing::info!(
@@ -121,7 +112,9 @@ pub async fn run_incremental(
     mutation_tx: &IndexMutationTx,
     search: &SearchHandle,
     config: &dyn IndexerSources,
+    registry: &SourceRegistry,
     state_dir: &Path,
+    rebuilt_from_scratch: bool,
 ) -> Result<(usize, usize)> {
     let mut manifest = Manifest::load(state_dir);
     let indexed_ids: HashSet<String> = search.all_doc_ids().await.unwrap_or_else(|e| {
@@ -185,23 +178,209 @@ pub async fn run_incremental(
         fs_count
     };
 
-    let indexed_sources: Vec<(&'static str, Vec<Document>)> = {
-        let sources = config.build_sources()?;
-        let mut out = Vec::new();
-        for source in &sources {
-            out.push((source.name(), source.index_all()?));
-        }
-        out
+    let other_count = if rebuilt_from_scratch {
+        reindex_non_fs_from_registry(mutation_tx, registry).await?
+    } else {
+        tracing::info!(
+            "Incremental indexer: skipping non-fs reindex_full (warm start, {} instance(s) will catch up via on_fs_events/on_tick)",
+            registry.instances.len()
+        );
+        0
     };
-
-    let mut other_count = 0usize;
-    for (name, docs) in indexed_sources {
-        other_count += docs.len();
-        mutation_tx.send(Mutation::UpsertMany(docs)).await?;
-        let _ = mutation_tx.barrier().await?;
-        tracing::info!("Source {} indexed", name);
-    }
 
     manifest.save(state_dir);
     Ok((fs_count, other_count))
+}
+
+async fn reindex_non_fs_from_registry(
+    mutation_tx: &IndexMutationTx,
+    registry: &SourceRegistry,
+) -> Result<usize> {
+    let writer_sink: Arc<dyn MutationSink> = Arc::new(WriterSink::new(mutation_tx.clone()));
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counting_sink: Arc<dyn MutationSink> =
+        Arc::new(CountingSink::new(Arc::clone(&writer_sink), Arc::clone(&counter)));
+
+    for inst in &registry.instances {
+        if inst.source.kind() == "fs" {
+            continue;
+        }
+        let instance_id = inst.instance_id.clone();
+        let state_dir = inst.state_dir.clone();
+        let source = Arc::clone(&inst.source);
+        let sink_for_task = Arc::clone(&counting_sink);
+        let before = counter.load(Ordering::Relaxed);
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<Result<()>>();
+        tokio::task::spawn_blocking(move || {
+            let ctx = SourceContext {
+                instance_id: &instance_id,
+                state_dir: &state_dir,
+            };
+            let r = source.reindex_full(&ctx, sink_for_task.as_ref());
+            let _ = tx.send(r);
+        });
+        rx.await??;
+        mutation_tx.barrier().await?;
+        let emitted = counter.load(Ordering::Relaxed) - before;
+        tracing::info!(
+            "Source instance {} reindexed ({} upserts)",
+            inst.instance_id,
+            emitted
+        );
+    }
+
+    Ok(counter.load(Ordering::Relaxed))
+}
+
+struct CountingSink {
+    inner: Arc<dyn MutationSink>,
+    counter: Arc<AtomicUsize>,
+}
+
+impl CountingSink {
+    fn new(inner: Arc<dyn MutationSink>, counter: Arc<AtomicUsize>) -> Self {
+        Self { inner, counter }
+    }
+}
+
+impl MutationSink for CountingSink {
+    fn emit(&self, mutation: SourceMutation) -> Result<()> {
+        if matches!(mutation, SourceMutation::Upsert(_)) {
+            self.counter.fetch_add(1, Ordering::Relaxed);
+        }
+        self.inner.emit(mutation)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lupa_core::{Action, Category, DocId};
+    use lupa_sources::IndexerSource;
+    use lupa_sources::source::{MutationSink as SourceSink, WatchSpec};
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    struct CaptureSink(Mutex<Vec<SourceMutation>>);
+
+    impl SourceSink for CaptureSink {
+        fn emit(&self, mutation: SourceMutation) -> Result<()> {
+            self.0.lock().unwrap().push(mutation);
+            Ok(())
+        }
+    }
+
+    struct StubSource {
+        kind: &'static str,
+        emitted_for: Mutex<Vec<String>>,
+    }
+
+    impl IndexerSource for StubSource {
+        fn kind(&self) -> &'static str {
+            self.kind
+        }
+        fn watch_paths(&self, _ctx: &SourceContext) -> Result<Vec<WatchSpec>> {
+            Ok(Vec::new())
+        }
+        fn reindex_full(&self, ctx: &SourceContext, sink: &dyn SourceSink) -> Result<()> {
+            self.emitted_for
+                .lock()
+                .unwrap()
+                .push(ctx.instance_id.to_string());
+            sink.emit(SourceMutation::DeleteSourceInstance {
+                instance_id: ctx.instance_id.to_string(),
+            })?;
+            let doc = Document {
+                id: DocId(format!("{}:1", ctx.instance_id)),
+                category: Category::File,
+                title: "stub".into(),
+                subtitle: String::new(),
+                icon_name: None,
+                kind_label: None,
+                body: None,
+                path: String::new(),
+                mtime: 0,
+                size: 0,
+                action: Action::OpenFile {
+                    path: PathBuf::from("/"),
+                },
+                extract_fail: false,
+                sender: None,
+                recipients: None,
+                source_instance: ctx.instance_id.to_string(),
+                extra: Vec::new(),
+            };
+            sink.emit(SourceMutation::Upsert(Box::new(doc)))?;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn counting_sink_counts_only_upserts() {
+        let inner: Arc<dyn MutationSink> = Arc::new(CaptureSink(Mutex::new(Vec::new())));
+        let counter = Arc::new(AtomicUsize::new(0));
+        let sink = CountingSink::new(Arc::clone(&inner), Arc::clone(&counter));
+
+        sink.emit(SourceMutation::DeleteSourceInstance {
+            instance_id: "x".into(),
+        })
+        .unwrap();
+        assert_eq!(counter.load(Ordering::Relaxed), 0);
+
+        let doc = Document {
+            id: DocId("x:1".into()),
+            category: Category::File,
+            title: String::new(),
+            subtitle: String::new(),
+            icon_name: None,
+            kind_label: None,
+            body: None,
+            path: String::new(),
+            mtime: 0,
+            size: 0,
+            action: Action::OpenFile {
+                path: PathBuf::from("/"),
+            },
+            extract_fail: false,
+            sender: None,
+            recipients: None,
+            source_instance: "x".into(),
+            extra: Vec::new(),
+        };
+        sink.emit(SourceMutation::Upsert(Box::new(doc))).unwrap();
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+
+        sink.emit(SourceMutation::Delete {
+            doc_id: "x:1".into(),
+        })
+        .unwrap();
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn stub_source_emits_delete_then_upsert() {
+        let stub = Arc::new(StubSource {
+            kind: "stub",
+            emitted_for: Mutex::new(Vec::new()),
+        });
+        let sink = CaptureSink(Mutex::new(Vec::new()));
+        let tmp = PathBuf::from("/tmp");
+        let ctx = SourceContext {
+            instance_id: "stub:1",
+            state_dir: &tmp,
+        };
+        stub.reindex_full(&ctx, &sink).unwrap();
+        let captured = sink.0.into_inner().unwrap();
+        assert_eq!(captured.len(), 2);
+        assert!(matches!(
+            captured[0],
+            SourceMutation::DeleteSourceInstance { .. }
+        ));
+        assert!(matches!(captured[1], SourceMutation::Upsert(_)));
+        assert_eq!(
+            stub.emitted_for.lock().unwrap().as_slice(),
+            &["stub:1".to_string()]
+        );
+    }
 }
