@@ -130,6 +130,8 @@ impl crate::Source for ThunderbirdAttachmentsSource {
                             suggested_filename: part.filename.clone(),
                         },
                         extract_fail,
+                        sender: None,
+                        recipients: None,
                     });
                 }
             }

@@ -183,6 +183,8 @@ impl crate::Source for AppsSource {
                             working_dir: entry.working_dir,
                         },
                         extract_fail: false,
+                        sender: None,
+                        recipients: None,
                     });
                 }
             }

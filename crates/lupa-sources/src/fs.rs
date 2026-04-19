@@ -102,6 +102,8 @@ impl FsSource {
             mtime: meta.mtime,
             size: meta.size,
             action: Action::OpenFile { path: meta.path },
+            sender: None,
+            recipients: None,
             extract_fail,
         }
     }

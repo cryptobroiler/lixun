@@ -21,7 +21,7 @@ pub use tantivy::{IndexWriter as TantivyIndexWriter, TantivyDocument as TantivyD
 
 use lupa_core::{Category, Document, Hit, Query};
 
-const INDEX_VERSION: u32 = 3;
+const INDEX_VERSION: u32 = 4;
 const INDEX_VERSION_FILE: &str = "index_version.txt";
 
 /// Tantivy schema fields.
@@ -40,6 +40,8 @@ pub struct LupaSchema {
     pub size: tantivy::schema::Field,
     pub action: tantivy::schema::Field,
     pub extract_fail: tantivy::schema::Field,
+    pub sender: tantivy::schema::Field,
+    pub recipients: tantivy::schema::Field,
 }
 
 impl LupaSchema {
@@ -71,6 +73,8 @@ impl LupaSchema {
         let size = builder.add_u64_field("size", STORED);
         let action = builder.add_text_field("action", STORED);
         let extract_fail = builder.add_bool_field("extract_fail", STORED);
+        let sender = builder.add_text_field("sender", stored_spotlight_text());
+        let recipients = builder.add_text_field("recipients", stored_spotlight_text());
 
         let schema = builder.build();
 
@@ -89,6 +93,8 @@ impl LupaSchema {
             size,
             action,
             extract_fail,
+            sender,
+            recipients,
         }
     }
 }
@@ -156,6 +162,8 @@ impl LupaIndex {
             s.size => doc.size,
             s.action => action_json.as_str(),
             s.extract_fail => doc.extract_fail,
+            s.sender => doc.sender.as_deref().unwrap_or(""),
+            s.recipients => doc.recipients.as_deref().unwrap_or(""),
         ])?;
 
         Ok(())
@@ -335,15 +343,29 @@ fn build_search_query(
 
     let normalized_text = text.replace('|', " OR ");
 
-    let mut parser = QueryParser::for_index(index, vec![s.title, s.title_terms, s.body, s.path]);
+    let mut parser = QueryParser::for_index(
+        index,
+        vec![
+            s.title,
+            s.title_terms,
+            s.body,
+            s.path,
+            s.sender,
+            s.recipients,
+        ],
+    );
     parser.set_conjunction_by_default();
     parser.set_field_boost(s.title, 5.0);
     parser.set_field_boost(s.title_terms, 4.0);
+    parser.set_field_boost(s.sender, 3.0);
+    parser.set_field_boost(s.recipients, 2.5);
     parser.set_field_boost(s.path, 1.5);
     parser.set_field_boost(s.body, 1.0);
     parser.set_field_fuzzy(s.title, false, 1, true);
     parser.set_field_fuzzy(s.title_terms, false, 1, true);
     parser.set_field_fuzzy(s.body, false, 1, true);
+    parser.set_field_fuzzy(s.sender, false, 1, true);
+    parser.set_field_fuzzy(s.recipients, false, 1, true);
 
     parser.parse_query_lenient(&normalized_text).0
 }
@@ -392,6 +414,8 @@ mod tests {
                 path: id.trim_start_matches("fs:").into(),
             },
             extract_fail: false,
+            sender: None,
+            recipients: None,
         }
     }
 
@@ -410,6 +434,36 @@ mod tests {
         assert_eq!(results[0].title, "test.txt");
         assert_eq!(results[0].icon_name, None);
         assert_eq!(results[0].kind_label, None);
+    }
+
+    #[test]
+    fn test_search_by_sender_and_recipients() {
+        let mut doc = sample_document(
+            "mail:1",
+            "Weekly sync notes",
+            "body text that must not match",
+        );
+        doc.category = Category::Mail;
+        doc.sender = Some("alice@example.com".into());
+        doc.recipients = Some("bob@example.com, carol@example.com".into());
+
+        let (_tmp, index) = create_index_with_docs(&[doc]);
+
+        let by_sender = search(&index, "alice@example.com");
+        assert_eq!(
+            by_sender.len(),
+            1,
+            "sender field must be searchable by email address"
+        );
+        assert_eq!(by_sender[0].title, "Weekly sync notes");
+
+        let by_recipient = search(&index, "carol@example.com");
+        assert_eq!(
+            by_recipient.len(),
+            1,
+            "recipients field must be searchable by email address"
+        );
+        assert_eq!(by_recipient[0].title, "Weekly sync notes");
     }
 
     #[test]

@@ -105,6 +105,10 @@ pub struct Document {
     pub size: u64,
     pub action: Action,
     pub extract_fail: bool,
+    /// Email `From` header. `None` for non-mail documents.
+    pub sender: Option<String>,
+    /// Email `To` + `Cc` joined by `, `. `None` for non-mail documents.
+    pub recipients: Option<String>,
 }
 
 /// Search query.

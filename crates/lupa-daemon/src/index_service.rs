@@ -369,5 +369,7 @@ pub fn index_file(path: &std::path::Path, max_file_size_mb: u64) -> Result<Docum
             path: path.to_path_buf(),
         },
         extract_fail,
+        sender: None,
+        recipients: None,
     })
 }

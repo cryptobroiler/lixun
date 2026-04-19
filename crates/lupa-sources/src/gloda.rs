@@ -219,7 +219,7 @@ fn parse_profiles_ini_selected(tb_path: &std::path::Path, content: &str) -> Opti
 pub fn query_messages(conn: &Connection, last_key: u64, limit: u32) -> rusqlite::Result<Vec<Document>> {
     let mut stmt = conn.prepare(
         "SELECT m.id, m.messageKey, m.headerMessageID, \
-                mt.c1subject, mt.c3author, mt.c0body \
+                mt.c1subject, mt.c3author, mt.c4recipients, mt.c0body \
          FROM messages m \
          LEFT JOIN messagesText_content mt ON m.id = mt.docid \
          WHERE m.id > ? AND m.deleted = 0 \
@@ -235,12 +235,13 @@ pub fn query_messages(conn: &Connection, last_key: u64, limit: u32) -> rusqlite:
             row.get::<_, Option<String>>(3)?,
             row.get::<_, Option<String>>(4)?,
             row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<String>>(6)?,
         ))
     })?;
 
     let mut docs = Vec::new();
     for row in rows {
-        let (id, message_key, header_message_id, subject, author, body_opt) = row?;
+        let (id, message_key, header_message_id, subject, author, recipients, body_opt) = row?;
 
         let header_id = header_message_id
             .filter(|s| !s.is_empty())
@@ -249,11 +250,14 @@ pub fn query_messages(conn: &Connection, last_key: u64, limit: u32) -> rusqlite:
             .or_else(|| message_key.map(|k| k.to_string()))
             .unwrap_or_default();
 
+        let author_clean = author.filter(|s| !s.is_empty());
+        let recipients_clean = recipients.filter(|s| !s.is_empty());
+
         docs.push(Document {
             id: DocId(format!("mail:{}", id)),
             category: Category::Mail,
             title: subject.unwrap_or_else(|| "(no subject)".into()),
-            subtitle: author.unwrap_or_default(),
+            subtitle: author_clean.clone().unwrap_or_default(),
             icon_name: Some("mail-message".into()),
             kind_label: Some("Email".into()),
             body: body_opt.filter(|s| !s.is_empty()),
@@ -262,6 +266,8 @@ pub fn query_messages(conn: &Connection, last_key: u64, limit: u32) -> rusqlite:
             size: 0,
             action: Action::OpenMail { message_id },
             extract_fail: false,
+            sender: author_clean,
+            recipients: recipients_clean,
         });
     }
 
@@ -352,8 +358,8 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO messagesText_content (docid, c0body, c1subject, c3author) \
-             VALUES (1, 'Hello body', 'Hello', 'alice@test')",
+            "INSERT INTO messagesText_content (docid, c0body, c1subject, c3author, c4recipients) \
+             VALUES (1, 'Hello body', 'Hello', 'alice@test', 'bob@test, carol@test')",
             [],
         )
         .unwrap();
@@ -363,12 +369,37 @@ mod tests {
         let d = &docs[0];
         assert_eq!(d.title, "Hello");
         assert_eq!(d.subtitle, "alice@test");
+        assert_eq!(d.sender.as_deref(), Some("alice@test"));
+        assert_eq!(d.recipients.as_deref(), Some("bob@test, carol@test"));
         assert!(d.body.is_some());
         assert!(d.body.as_ref().unwrap().contains("Hello body"));
         match &d.action {
             Action::OpenMail { message_id } => assert_eq!(message_id, "abc@example.com"),
             _ => panic!("expected OpenMail action"),
         }
+    }
+
+    #[test]
+    fn test_gloda_missing_author_and_recipients_are_none() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup_schema(&conn);
+        conn.execute(
+            "INSERT INTO messages (id, messageKey, headerMessageID, deleted, conversationID) \
+             VALUES (1, 1, '<x@y>', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messagesText_content (docid, c0body, c1subject) \
+             VALUES (1, 'b', 's')",
+            [],
+        )
+        .unwrap();
+
+        let docs = query_messages(&conn, 0, 1000).unwrap();
+        assert_eq!(docs.len(), 1);
+        assert!(docs[0].sender.is_none());
+        assert!(docs[0].recipients.is_none());
     }
 
     #[test]

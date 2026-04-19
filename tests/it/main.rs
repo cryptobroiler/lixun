@@ -30,6 +30,8 @@ fn make_doc(id: &str, title: &str, body: Option<&str>) -> Document {
             path: format!("/tmp/{id}").into(),
         },
         extract_fail: false,
+        sender: None,
+        recipients: None,
     }
 }
 
