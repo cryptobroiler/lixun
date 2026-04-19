@@ -213,6 +213,26 @@ impl crate::source::IndexerSource for AppsSource {
             .collect())
     }
 
+    fn on_fs_events(
+        &self,
+        ctx: &crate::source::SourceContext,
+        events: &[crate::source::SourceEvent],
+        sink: &dyn crate::source::MutationSink,
+    ) -> Result<()> {
+        let docs = self.index_all()?;
+        let n = docs.len();
+        for mut doc in docs {
+            doc.source_instance = ctx.instance_id.to_string();
+            sink.emit(crate::source::Mutation::Upsert(Box::new(doc)))?;
+        }
+        tracing::info!(
+            "apps: {} fs event(s) -> reindexed {} application(s)",
+            events.len(),
+            n
+        );
+        Ok(())
+    }
+
     fn reindex_full(
         &self,
         ctx: &crate::source::SourceContext,
