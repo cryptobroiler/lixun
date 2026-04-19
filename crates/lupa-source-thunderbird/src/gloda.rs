@@ -291,7 +291,6 @@ fn strip_angle_brackets(s: String) -> String {
 }
 
 const GLODA_CURSOR_FILE: &str = "gloda_cursor.json";
-const GLODA_BATCH_LIMIT: u32 = 250;
 
 fn doc_gloda_id(doc: &Document) -> Option<u64> {
     doc.id.0.strip_prefix("mail:").and_then(|s| s.parse().ok())
@@ -332,9 +331,10 @@ impl lupa_sources::source::IndexerSource for GlodaSource {
         }
 
         let cursor = read_cursor(ctx.state_dir);
+        let batch_limit = self.limit;
         let result: rusqlite::Result<Vec<Document>> = with_busy_retry(|| {
             let conn = self.open_db()?;
-            query_messages(&conn, cursor, GLODA_BATCH_LIMIT)
+            query_messages(&conn, cursor, batch_limit)
         });
 
         let docs = match result {
@@ -382,11 +382,12 @@ impl lupa_sources::source::IndexerSource for GlodaSource {
         }
 
         let mut cursor: u64 = 0;
+        let batch_limit = self.limit;
         loop {
             let c = cursor;
             let result: rusqlite::Result<Vec<Document>> = with_busy_retry(|| {
                 let conn = self.open_db()?;
-                query_messages(&conn, c, GLODA_BATCH_LIMIT)
+                query_messages(&conn, c, batch_limit)
             });
             let docs = match result {
                 Ok(d) => d,
