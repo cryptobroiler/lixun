@@ -144,6 +144,46 @@ impl crate::Source for ThunderbirdAttachmentsSource {
     }
 }
 
+impl crate::source::IndexerSource for ThunderbirdAttachmentsSource {
+    fn kind(&self) -> &'static str {
+        "tb_attachments"
+    }
+
+    fn watch_paths(
+        &self,
+        _ctx: &crate::source::SourceContext,
+    ) -> Result<Vec<crate::source::WatchSpec>> {
+        let mut out = Vec::new();
+        for rel in ["Mail", "ImapMail"] {
+            let p = self.profile_path.join(rel);
+            if p.exists() {
+                out.push(crate::source::WatchSpec {
+                    path: p,
+                    recursive: true,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    fn reindex_full(
+        &self,
+        ctx: &crate::source::SourceContext,
+        sink: &dyn crate::source::MutationSink,
+    ) -> Result<()> {
+        sink.emit(crate::source::Mutation::DeleteSourceInstance {
+            instance_id: ctx.instance_id.to_string(),
+        })?;
+
+        let docs = <Self as crate::Source>::index_all(self)?;
+        for mut doc in docs {
+            doc.source_instance = ctx.instance_id.to_string();
+            sink.emit(crate::source::Mutation::Upsert(Box::new(doc)))?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
