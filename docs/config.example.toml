@@ -254,7 +254,9 @@ filter_mail = "<Ctrl>3"
 filter_attachments = "<Ctrl>4"
 global_toggle = "Super+space"
 
-# ─── Maildir sources (optional) ───────────────────────────────────────
+# ─── Maildir sources ──────────────────────────────────────────────────
+#
+# Presence of this section = plugin loaded. Omit to skip.
 #
 # Index messages from a maildir-format mail store (mutt/neomutt/notmuch/
 # offlineimap/isync/fdm/etc.). Each [[maildir]] block is one instance —
@@ -283,14 +285,15 @@ global_toggle = "Super+space"
 # paths = ["~/.local/share/mail/work"]
 # open_cmd = ["aerc", "mailto:{message_id}"]
 
-# ─── Thunderbird source (optional) ────────────────────────────────────
+# ─── Thunderbird source ───────────────────────────────────────────────
 #
-# When present and ~/.thunderbird/ exists, Lupa auto-registers two source
-# instances: builtin:gloda (SQLite messages: subject, sender, recipients,
-# body snippet) and builtin:tb_attachments (mbox-level attachment text).
-# Omit this whole section to keep the default behavior (auto-detect,
-# both enabled, batch=250). Adding or changing this section does NOT
-# trigger a schema wipe — all four settings are runtime-only.
+# Presence of this section = plugin loaded. Omit to skip.
+#
+# When the section is present and a Thunderbird profile can be located
+# (either via the `profile` field below or by auto-detecting
+# ~/.thunderbird/), Lupa registers two source instances:
+# builtin:gloda (SQLite messages: subject, sender, recipients, body
+# snippet) and builtin:tb_attachments (mbox-level attachment text).
 #
 # [thunderbird]
 # enabled = true
@@ -298,6 +301,8 @@ global_toggle = "Super+space"
 # # Override auto-detection (useful if you have multiple profiles and
 # # the default one isn't what you want Lupa to index). Must be the
 # # full profile dir containing global-messages-db.sqlite and Mail/.
+# # If the path does not exist, the plugin logs a warn and registers
+# # no sources — the rest of the daemon continues to run.
 # # profile = "~/.thunderbird/work.default-release"
 #
 # # How many gloda messages to ingest per 30s tick. Default 250.
