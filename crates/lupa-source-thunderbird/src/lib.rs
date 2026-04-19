@@ -1,16 +1,23 @@
 //! Thunderbird source plugin: gloda-SQLite messages + mbox attachments.
 //!
-//! Both sources share Thunderbird profile auto-discovery via `find_profile`
-//! and the mbox parser. They register at daemon startup as
-//! `builtin:gloda` and `builtin:tb_attachments` when a profile is found.
+//! Daemon loads this plugin only when the user config contains a
+//! `[thunderbird]` section. ThunderbirdFactory parses the section and
+//! produces one or two `IndexerSource` instances (gloda plus, optionally,
+//! tb_attachments). Profile auto-discovery is internal to this crate —
+//! neither the daemon nor any other crate needs to call find_profile.
 
 pub mod attachments;
 pub mod gloda;
 pub mod mbox;
 
+mod factory;
+
 pub use attachments::ThunderbirdAttachmentsSource;
+pub use factory::ThunderbirdFactory;
 pub use gloda::GlodaSource;
 
+#[doc(hidden)]
+#[deprecated(note = "use ThunderbirdFactory via config section; removed in G.4")]
 pub fn find_profile() -> Option<std::path::PathBuf> {
-    GlodaSource::find_profile()
+    gloda::find_profile()
 }

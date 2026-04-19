@@ -6,6 +6,10 @@ use rusqlite::{Connection, OpenFlags};
 use std::path::PathBuf;
 use std::time::Duration;
 
+pub(crate) fn find_profile() -> Option<PathBuf> {
+    GlodaSource::find_profile()
+}
+
 /// Retry a fallible operation with bounded backoff for "busy" errors.
 /// Generic over error type and classifier for testability.
 fn with_busy_retry_generic<T, E, F, C>(backoffs: &[Duration], classify: C, mut f: F) -> Result<T, E>

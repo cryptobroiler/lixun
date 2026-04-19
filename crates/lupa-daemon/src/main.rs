@@ -623,6 +623,7 @@ fn register_builtin_sources(
     );
 
     if config.thunderbird.enabled {
+        #[allow(deprecated)]
         let profile = config
             .thunderbird
             .profile_override
