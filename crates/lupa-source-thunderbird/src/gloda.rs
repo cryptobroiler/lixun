@@ -350,15 +350,17 @@ impl lupa_sources::source::IndexerSource for GlodaSource {
             return Ok(());
         }
 
+        let instance_id = ctx.instance_id.to_string();
         let mut new_cursor = cursor;
-        for doc in docs {
+        let mut batch: Vec<Document> = Vec::with_capacity(docs.len());
+        for mut doc in docs {
             if let Some(gid) = doc_gloda_id(&doc) {
                 new_cursor = new_cursor.max(gid);
             }
-            let mut d = doc;
-            d.source_instance = ctx.instance_id.to_string();
-            sink.emit(lupa_sources::source::Mutation::Upsert(Box::new(d)))?;
+            doc.source_instance = instance_id.clone();
+            batch.push(doc);
         }
+        sink.emit(lupa_sources::source::Mutation::UpsertMany(batch))?;
 
         if new_cursor > cursor {
             let _ = write_cursor(ctx.state_dir, new_cursor);
@@ -402,15 +404,17 @@ impl lupa_sources::source::IndexerSource for GlodaSource {
                 break;
             }
 
+            let instance_id = ctx.instance_id.to_string();
             let mut new_cursor = cursor;
-            for doc in docs {
+            let mut batch: Vec<Document> = Vec::with_capacity(docs.len());
+            for mut doc in docs {
                 if let Some(gid) = doc_gloda_id(&doc) {
                     new_cursor = new_cursor.max(gid);
                 }
-                let mut d = doc;
-                d.source_instance = ctx.instance_id.to_string();
-                sink.emit(lupa_sources::source::Mutation::Upsert(Box::new(d)))?;
+                doc.source_instance = instance_id.clone();
+                batch.push(doc);
             }
+            sink.emit(lupa_sources::source::Mutation::UpsertMany(batch))?;
 
             if new_cursor == cursor {
                 break;

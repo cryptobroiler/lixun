@@ -26,6 +26,11 @@ impl MutationSink for WriterSink {
                 SrcMutation::Upsert(boxed) => {
                     tx.send(IndexMutation::UpsertMany(vec![*boxed])).await?;
                 }
+                SrcMutation::UpsertMany(docs) => {
+                    if !docs.is_empty() {
+                        tx.send(IndexMutation::UpsertMany(docs)).await?;
+                    }
+                }
                 SrcMutation::Delete { doc_id } => {
                     tx.send(IndexMutation::DeleteMany(vec![doc_id])).await?;
                 }

@@ -219,11 +219,16 @@ impl crate::source::IndexerSource for AppsSource {
         events: &[crate::source::SourceEvent],
         sink: &dyn crate::source::MutationSink,
     ) -> Result<()> {
+        let instance_id = ctx.instance_id.to_string();
         let docs = self.index_all()?;
         let n = docs.len();
-        for mut doc in docs {
-            doc.source_instance = ctx.instance_id.to_string();
-            sink.emit(crate::source::Mutation::Upsert(Box::new(doc)))?;
+        if !docs.is_empty() {
+            let mut batch: Vec<Document> = Vec::with_capacity(n);
+            for mut doc in docs {
+                doc.source_instance = instance_id.clone();
+                batch.push(doc);
+            }
+            sink.emit(crate::source::Mutation::UpsertMany(batch))?;
         }
         tracing::info!(
             "apps: {} fs event(s) -> reindexed {} application(s)",
@@ -238,14 +243,19 @@ impl crate::source::IndexerSource for AppsSource {
         ctx: &crate::source::SourceContext,
         sink: &dyn crate::source::MutationSink,
     ) -> Result<()> {
+        let instance_id = ctx.instance_id.to_string();
         sink.emit(crate::source::Mutation::DeleteSourceInstance {
-            instance_id: ctx.instance_id.to_string(),
+            instance_id: instance_id.clone(),
         })?;
 
         let docs = self.index_all()?;
-        for mut doc in docs {
-            doc.source_instance = ctx.instance_id.to_string();
-            sink.emit(crate::source::Mutation::Upsert(Box::new(doc)))?;
+        if !docs.is_empty() {
+            let mut batch: Vec<Document> = Vec::with_capacity(docs.len());
+            for mut doc in docs {
+                doc.source_instance = instance_id.clone();
+                batch.push(doc);
+            }
+            sink.emit(crate::source::Mutation::UpsertMany(batch))?;
         }
         Ok(())
     }

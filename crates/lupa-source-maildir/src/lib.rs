@@ -272,10 +272,13 @@ impl IndexerSource for MaildirSource {
     }
 
     fn reindex_full(&self, ctx: &SourceContext, sink: &dyn MutationSink) -> Result<()> {
+        let instance_id = ctx.instance_id.to_string();
         sink.emit(Mutation::DeleteSourceInstance {
-            instance_id: ctx.instance_id.to_string(),
+            instance_id: instance_id.clone(),
         })?;
 
+        const BATCH: usize = 500;
+        let mut batch: Vec<Document> = Vec::with_capacity(BATCH);
         let mut count = 0usize;
         for root in &self.roots {
             if !root.exists() {
@@ -283,11 +286,17 @@ impl IndexerSource for MaildirSource {
             }
             for msg_path in walk::walk_messages(root) {
                 if let Some(mut doc) = self.parse_message(root, &msg_path)? {
-                    doc.source_instance = ctx.instance_id.to_string();
-                    sink.emit(Mutation::Upsert(Box::new(doc)))?;
+                    doc.source_instance = instance_id.clone();
+                    batch.push(doc);
                     count += 1;
+                    if batch.len() >= BATCH {
+                        sink.emit(Mutation::UpsertMany(std::mem::take(&mut batch)))?;
+                    }
                 }
             }
+        }
+        if !batch.is_empty() {
+            sink.emit(Mutation::UpsertMany(batch))?;
         }
         tracing::info!(
             "maildir source '{}': reindex_full emitted {} docs",
@@ -342,15 +351,17 @@ mod tests {
         assert_eq!(
             mutations.len(),
             2,
-            "expected DeleteSourceInstance + 1 Upsert"
+            "expected DeleteSourceInstance + 1 UpsertMany"
         );
         assert!(matches!(
             mutations[0],
             Mutation::DeleteSourceInstance { .. }
         ));
-        let Mutation::Upsert(doc) = &mutations[1] else {
-            panic!("expected Upsert");
+        let Mutation::UpsertMany(docs) = &mutations[1] else {
+            panic!("expected UpsertMany");
         };
+        assert_eq!(docs.len(), 1);
+        let doc = &docs[0];
         assert_eq!(doc.title, "Weekly sync");
         assert_eq!(doc.sender.as_deref(), Some("alice@example.com"));
         assert_eq!(doc.source_instance, "personal-mail");
@@ -440,13 +451,17 @@ mod tests {
         let sink = CaptureSink(Mutex::new(Vec::new()));
         source.reindex_full(&ctx, &sink).unwrap();
 
-        let count_upserts = sink
+        let count_upserts: usize = sink
             .0
             .into_inner()
             .unwrap()
             .iter()
-            .filter(|m| matches!(m, Mutation::Upsert(_)))
-            .count();
+            .map(|m| match m {
+                Mutation::Upsert(_) => 1usize,
+                Mutation::UpsertMany(docs) => docs.len(),
+                _ => 0,
+            })
+            .sum();
         assert_eq!(count_upserts, 1, "tmp/ must be skipped");
     }
 }

@@ -252,8 +252,14 @@ impl CountingSink {
 
 impl MutationSink for CountingSink {
     fn emit(&self, mutation: SourceMutation) -> Result<()> {
-        if matches!(mutation, SourceMutation::Upsert(_)) {
-            self.counter.fetch_add(1, Ordering::Relaxed);
+        match &mutation {
+            SourceMutation::Upsert(_) => {
+                self.counter.fetch_add(1, Ordering::Relaxed);
+            }
+            SourceMutation::UpsertMany(docs) => {
+                self.counter.fetch_add(docs.len(), Ordering::Relaxed);
+            }
+            _ => {}
         }
         self.inner.emit(mutation)
     }
@@ -362,6 +368,38 @@ mod tests {
         })
         .unwrap();
         assert_eq!(counter.load(Ordering::Relaxed), 1);
+
+        let mk_doc = |id: &str| Document {
+            id: DocId(id.into()),
+            category: Category::File,
+            title: String::new(),
+            subtitle: String::new(),
+            icon_name: None,
+            kind_label: None,
+            body: None,
+            path: String::new(),
+            mtime: 0,
+            size: 0,
+            action: Action::OpenFile {
+                path: PathBuf::from("/"),
+            },
+            extract_fail: false,
+            sender: None,
+            recipients: None,
+            source_instance: "x".into(),
+            extra: Vec::new(),
+        };
+        sink.emit(SourceMutation::UpsertMany(vec![
+            mk_doc("x:2"),
+            mk_doc("x:3"),
+            mk_doc("x:4"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            4,
+            "UpsertMany must add len to counter"
+        );
     }
 
     #[test]

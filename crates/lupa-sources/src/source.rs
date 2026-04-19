@@ -30,6 +30,7 @@ pub enum SourceEventKind {
 
 pub enum Mutation {
     Upsert(Box<Document>),
+    UpsertMany(Vec<Document>),
     Delete { doc_id: String },
     DeleteSourceInstance { instance_id: String },
 }

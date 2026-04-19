@@ -1,9 +1,9 @@
 //! Thunderbird attachments source — parse mbox files for attachments.
 
 use crate::mbox;
-use lupa_sources::mime_icons;
 use anyhow::Result;
 use lupa_core::{Action, Category, DocId, Document};
+use lupa_sources::mime_icons;
 use mime_guess::Mime;
 use std::path::PathBuf;
 
@@ -188,10 +188,15 @@ impl lupa_sources::source::IndexerSource for ThunderbirdAttachmentsSource {
             instance_id: ctx.instance_id.to_string(),
         })?;
 
+        let instance_id = ctx.instance_id.to_string();
         let docs = self.index_all()?;
-        for mut doc in docs {
-            doc.source_instance = ctx.instance_id.to_string();
-            sink.emit(lupa_sources::source::Mutation::Upsert(Box::new(doc)))?;
+        if !docs.is_empty() {
+            let mut batch: Vec<lupa_core::Document> = Vec::with_capacity(docs.len());
+            for mut doc in docs {
+                doc.source_instance = instance_id.clone();
+                batch.push(doc);
+            }
+            sink.emit(lupa_sources::source::Mutation::UpsertMany(batch))?;
         }
         Ok(())
     }
