@@ -7,6 +7,7 @@
 use anyhow::Result;
 use lupa_core::{Action, Category, DocId, Document};
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::manifest::Manifest;
@@ -89,14 +90,35 @@ impl FsSource {
         }
     }
 
+    const BATCH_SIZE: usize = 2000;
+
     pub fn index_incremental(
         &self,
         manifest: &mut Manifest,
+        indexed_ids: &HashSet<String>,
     ) -> Result<(Vec<Document>, Vec<String>)> {
+        let mut collected: Vec<Document> = Vec::new();
+        let deleted = self.index_incremental_batched(manifest, indexed_ids, |batch| {
+            collected.extend(batch);
+            Ok(())
+        })?;
+        Ok((collected, deleted))
+    }
+
+    pub fn index_incremental_batched<F>(
+        &self,
+        manifest: &mut Manifest,
+        indexed_ids: &HashSet<String>,
+        mut on_batch: F,
+    ) -> Result<Vec<String>>
+    where
+        F: FnMut(Vec<Document>) -> Result<()>,
+    {
         let max_size = self.max_file_size_mb * 1024 * 1024;
 
-        let mut current_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut current_files: HashSet<String> = HashSet::new();
         let mut changed_metas: Vec<FileMeta> = Vec::new();
+        let mut resurrected: u64 = 0;
 
         for root in &self.roots {
             for entry in walkdir::WalkDir::new(root)
@@ -125,8 +147,13 @@ impl FsSource {
                 let path_str = path.to_string_lossy().to_string();
                 current_files.insert(path_str.clone());
 
-                if manifest.is_unchanged(&path_str, mtime) {
+                let doc_id = format!("fs:{}", path_str);
+                let in_index = indexed_ids.contains(&doc_id);
+                if manifest.is_unchanged(&path_str, mtime) && in_index {
                     continue;
+                }
+                if !in_index && manifest.is_unchanged(&path_str, mtime) {
+                    resurrected += 1;
                 }
 
                 changed_metas.push(FileMeta {
@@ -142,6 +169,13 @@ impl FsSource {
             }
         }
 
+        if resurrected > 0 {
+            tracing::warn!(
+                "Filesystem: {} files were in manifest but missing from index, re-indexing",
+                resurrected
+            );
+        }
+
         let deleted_ids: Vec<String> = manifest
             .known_paths()
             .filter(|p| !current_files.contains(*p))
@@ -152,49 +186,73 @@ impl FsSource {
             manifest.remove(path.strip_prefix("fs:").unwrap());
         }
 
-        if changed_metas.is_empty() && deleted_ids.is_empty() {
-            tracing::info!("Filesystem: no changes detected");
-            return Ok((Vec::new(), Vec::new()));
+        if changed_metas.is_empty() {
+            if !deleted_ids.is_empty() {
+                tracing::info!(
+                    "Filesystem: {} deleted, nothing to extract",
+                    deleted_ids.len()
+                );
+            } else {
+                tracing::info!("Filesystem: no changes detected");
+            }
+            return Ok(deleted_ids);
         }
 
         tracing::info!(
-            "Filesystem: {} changed/new files, {} deleted, extracting in parallel...",
+            "Filesystem: {} changed/new files, {} deleted, extracting in parallel (batch={})...",
             changed_metas.len(),
-            deleted_ids.len()
+            deleted_ids.len(),
+            Self::BATCH_SIZE,
         );
 
         let pool = Self::build_pool();
-        let docs: Vec<Document> = pool.install(|| {
-            changed_metas
-                .into_par_iter()
-                .map(|meta| {
-                    let (body, extract_fail) = if meta.size <= max_size {
-                        match Self::extract_content(&meta.path) {
-                            Ok(Some(text)) => (Some(text), false),
-                            Ok(None) => (None, false),
-                            Err(_) => (None, true),
-                        }
-                    } else {
-                        (None, false)
-                    };
+        let total = changed_metas.len();
+        let mut extract_fails: u64 = 0;
+        let mut processed: usize = 0;
+        while !changed_metas.is_empty() {
+            let take_n = Self::BATCH_SIZE.min(changed_metas.len());
+            let chunk: Vec<FileMeta> = changed_metas.drain(..take_n).collect();
+            let docs: Vec<Document> = pool.install(|| {
+                chunk
+                    .into_par_iter()
+                    .map(|meta| {
+                        let (body, extract_fail) = if meta.size <= max_size {
+                            match Self::extract_content(&meta.path) {
+                                Ok(Some(text)) => (Some(text), false),
+                                Ok(None) => (None, false),
+                                Err(_) => (None, true),
+                            }
+                        } else {
+                            (None, false)
+                        };
 
-                    Self::build_document(meta, body, extract_fail)
-                })
-                .collect()
-        });
+                        Self::build_document(meta, body, extract_fail)
+                    })
+                    .collect()
+            });
 
-        for doc in &docs {
-            manifest.update(doc.path.clone(), doc.mtime);
+            for doc in &docs {
+                manifest.update(doc.path.clone(), doc.mtime);
+                if doc.extract_fail {
+                    extract_fails += 1;
+                }
+            }
+            processed += docs.len();
+            on_batch(docs)?;
+            tracing::info!(
+                "Filesystem incremental: flushed batch, {}/{} files processed",
+                processed,
+                total,
+            );
         }
 
-        let extract_fails = docs.iter().filter(|doc| doc.extract_fail).count();
         tracing::info!(
-            "Filesystem incremental: {} docs indexed, {} deleted ({} extract failures)",
-            docs.len(),
+            "Filesystem incremental: {} docs indexed across batches, {} deleted ({} extract failures)",
+            processed,
             deleted_ids.len(),
-            extract_fails
+            extract_fails,
         );
-        Ok((docs, deleted_ids))
+        Ok(deleted_ids)
     }
 }
 
@@ -314,5 +372,39 @@ mod tests {
 
         assert_eq!(doc.icon_name.as_deref(), Some("text-x-generic"));
         assert_eq!(doc.kind_label.as_deref(), Some("Octet Stream"));
+    }
+
+    #[test]
+    fn incremental_reindexes_when_manifest_says_unchanged_but_index_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path_a = tmp.path().join("a.txt");
+        let path_b = tmp.path().join("b.txt");
+        std::fs::write(&path_a, b"alpha").unwrap();
+        std::fs::write(&path_b, b"beta").unwrap();
+
+        let source = FsSource::new(vec![tmp.path().to_path_buf()], Vec::new(), 1);
+
+        let mut manifest = Manifest::default();
+        let all_ids: HashSet<String> = HashSet::new();
+        let (docs, _deleted) = source.index_incremental(&mut manifest, &all_ids).unwrap();
+        assert_eq!(docs.len(), 2, "first pass indexes both files");
+        assert_eq!(manifest.len(), 2);
+
+        let (docs_second, _) = source.index_incremental(&mut manifest, &all_ids).unwrap();
+        assert_eq!(
+            docs_second.len(),
+            2,
+            "index was empty so both files must be re-surfaced even with a populated manifest",
+        );
+
+        let indexed_ids: HashSet<String> = docs.iter().map(|d| d.id.0.clone()).collect();
+        let (docs_third, _) = source
+            .index_incremental(&mut manifest, &indexed_ids)
+            .unwrap();
+        assert_eq!(
+            docs_third.len(),
+            0,
+            "once the index has the docs and nothing changed, nothing is re-indexed",
+        );
     }
 }

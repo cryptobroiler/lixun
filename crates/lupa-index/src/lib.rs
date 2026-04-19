@@ -4,6 +4,7 @@ pub mod calculator;
 pub mod tokenizer;
 
 use anyhow::Result;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tantivy::{
     collector::TopDocs,
@@ -252,6 +253,30 @@ impl LupaIndex {
         Ok(())
     }
 
+    /// All `id` values in the live index. O(N) over stored docs; intended for
+    /// cross-checking a manifest against the index, not the search hot path.
+    pub fn all_doc_ids(&self) -> Result<HashSet<String>> {
+        let reader = self.index.reader()?;
+        let searcher = reader.searcher();
+        let mut out: HashSet<String> = HashSet::new();
+        for (segment_ord, segment_reader) in searcher.segment_readers().iter().enumerate() {
+            let alive = segment_reader.alive_bitset();
+            for doc_id in 0..segment_reader.max_doc() {
+                if let Some(bitset) = alive
+                    && !bitset.is_alive(doc_id)
+                {
+                    continue;
+                }
+                let addr = tantivy::DocAddress::new(segment_ord as u32, doc_id);
+                let doc: TantivyDocument = searcher.doc(addr)?;
+                if let Some(id) = doc.get_first(self.schema.id).and_then(|v| v.as_str()) {
+                    out.insert(id.to_string());
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Create an index writer.
     pub fn writer(&self, heap_size: usize) -> Result<IndexWriter<TantivyDocument>> {
         let writer = self.index.writer(heap_size)?;
@@ -421,6 +446,44 @@ mod tests {
             })
             .unwrap();
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_all_doc_ids_lists_live_docs_and_excludes_deleted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().to_str().unwrap();
+
+        let mut index = LupaIndex::create_or_open(path).unwrap();
+        let mut writer = index.writer(20_000_000).unwrap();
+        for i in 0..3 {
+            index
+                .upsert(
+                    &sample_document(
+                        &format!("fs:/tmp/a{i}.txt"),
+                        &format!("a{i}.txt"),
+                        "body",
+                    ),
+                    &mut writer,
+                )
+                .unwrap();
+        }
+        index.commit(&mut writer).unwrap();
+        writer.wait_merging_threads().unwrap();
+
+        let mut writer = index.writer(20_000_000).unwrap();
+        let ids = index.all_doc_ids().unwrap();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains("fs:/tmp/a0.txt"));
+        assert!(ids.contains("fs:/tmp/a1.txt"));
+        assert!(ids.contains("fs:/tmp/a2.txt"));
+
+        index.delete_by_id("fs:/tmp/a1.txt", &mut writer).unwrap();
+        index.commit(&mut writer).unwrap();
+        writer.wait_merging_threads().unwrap();
+
+        let ids = index.all_doc_ids().unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(!ids.contains("fs:/tmp/a1.txt"));
     }
 
     #[test]

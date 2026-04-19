@@ -92,6 +92,11 @@ impl SearchHandle {
         let idx = self.index.lock().await;
         idx.search(query)
     }
+
+    pub async fn all_doc_ids(&self) -> Result<std::collections::HashSet<String>> {
+        let idx = self.index.lock().await;
+        idx.all_doc_ids()
+    }
 }
 
 pub fn spawn_writer_service(

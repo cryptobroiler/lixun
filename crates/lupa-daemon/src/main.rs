@@ -17,15 +17,14 @@ use tokio::sync::RwLock;
 mod cursors;
 mod gloda_poll;
 mod history;
-mod index_service;
 mod query_log;
 use history::ClickHistory;
 use query_log::QueryLog;
 
-use index_service::{IndexMutationTx, Mutation, SearchHandle};
 use lupa_daemon::config;
 use lupa_daemon::hotkeys;
-use lupa_sources::Source;
+use lupa_daemon::index_service::{self, IndexMutationTx, SearchHandle};
+use lupa_daemon::indexer;
 
 mod source_watcher;
 mod watcher;
@@ -174,12 +173,14 @@ async fn main() -> Result<()> {
     let (mutation_tx, search, _writer_handle) = index_service::spawn_writer_service(index)?;
 
     let indexer_mutation = mutation_tx.clone();
+    let indexer_search = search.clone();
     let indexer_stats = Arc::clone(&stats);
     let indexer_state_dir = state_dir.clone();
     let indexer_config = Arc::clone(&shared_config);
     tokio::spawn(async move {
         if let Err(e) = run_incremental_indexer(
             indexer_mutation,
+            indexer_search,
             indexer_stats,
             indexer_state_dir,
             indexer_config,
@@ -349,63 +350,19 @@ async fn main() -> Result<()> {
 
 async fn run_incremental_indexer(
     mutation_tx: IndexMutationTx,
+    search: SearchHandle,
     stats: Arc<RwLock<IndexStats>>,
     state_dir: std::path::PathBuf,
     config: Arc<config::Config>,
 ) -> Result<()> {
-    let mut manifest = lupa_sources::manifest::Manifest::load(&state_dir);
-
-    {
-        let fs_source = config.build_fs_source()?;
-        let (docs, deleted_ids) = fs_source.index_incremental(&mut manifest)?;
-
-        if !docs.is_empty() || !deleted_ids.is_empty() {
-            let doc_count = docs.len();
-            let del_count = deleted_ids.len();
-            mutation_tx.send(Mutation::UpsertMany(docs)).await?;
-            mutation_tx.send(Mutation::DeleteMany(deleted_ids)).await?;
-            let _gen = mutation_tx.barrier().await?;
-
-            {
-                let mut stats_lock = stats.write().await;
-                stats_lock.indexed_docs += doc_count as u64;
-                stats_lock.last_reindex = Some(Utc::now());
-            }
-
-            tracing::info!(
-                "Filesystem incremental: +{} docs, -{} deleted",
-                doc_count,
-                del_count
-            );
-        } else {
-            tracing::info!("Filesystem: no changes");
-        }
+    let (fs_count, other_count) =
+        indexer::run_incremental(&mutation_tx, &search, &config, &state_dir).await?;
+    let total = fs_count + other_count;
+    if total > 0 {
+        let mut stats_lock = stats.write().await;
+        stats_lock.indexed_docs += total as u64;
+        stats_lock.last_reindex = Some(Utc::now());
     }
-
-    {
-        let indexed_sources: Vec<(&'static str, Vec<lupa_core::Document>)> = {
-            let sources = config.build_sources()?;
-            let mut out = Vec::new();
-            for source in &sources {
-                out.push((source.name(), source.index_all()?));
-            }
-            out
-        };
-
-        for (name, docs) in indexed_sources {
-            let doc_count = docs.len();
-            mutation_tx.send(Mutation::UpsertMany(docs)).await?;
-            let _gen = mutation_tx.barrier().await?;
-            {
-                let mut stats_lock = stats.write().await;
-                stats_lock.indexed_docs += doc_count as u64;
-                stats_lock.last_reindex = Some(Utc::now());
-            }
-            tracing::info!("Source {} indexed: {} docs", name, doc_count);
-        }
-    }
-
-    manifest.save(&state_dir);
     Ok(())
 }
 
@@ -413,38 +370,16 @@ async fn do_reindex(
     mutation_tx: &IndexMutationTx,
     stats: &Arc<RwLock<IndexStats>>,
     config: &config::Config,
+    state_dir: &std::path::Path,
     paths: Vec<std::path::PathBuf>,
 ) -> Result<usize, anyhow::Error> {
-    let mut all_docs: Vec<lupa_core::Document> = Vec::new();
-
-    if paths.is_empty() {
-        let sources = config.build_sources()?;
-        for source in &sources {
-            tracing::info!("Reindexing source: {}", source.name());
-            let docs = source.index_all()?;
-            all_docs.extend(docs);
-        }
+    let count = if paths.is_empty() {
+        indexer::reindex_full(mutation_tx, config, state_dir)
+            .await?
+            .total_docs
     } else {
-        for path in &paths {
-            if path.is_file() {
-                if let Ok(doc) = index_service::index_file(path, config.max_file_size_mb) {
-                    all_docs.push(doc);
-                }
-            } else if path.is_dir() {
-                let source = lupa_sources::fs::FsSource::new(
-                    vec![path.clone()],
-                    config.exclude.clone(),
-                    config.max_file_size_mb,
-                );
-                let docs = source.index_all()?;
-                all_docs.extend(docs);
-            }
-        }
-    }
-
-    let count = all_docs.len();
-    mutation_tx.send(Mutation::UpsertMany(all_docs)).await?;
-    mutation_tx.commit_now().await?;
+        indexer::reindex_paths(mutation_tx, config, &paths).await?
+    };
 
     {
         let mut stats_lock = stats.write().await;
@@ -609,7 +544,7 @@ async fn handle_client(
             Err(e) => Response::Error(e.to_string()),
         },
         Request::Reindex { paths } => {
-            let result = do_reindex(&mutation_tx, &stats, &config, paths).await;
+            let result = do_reindex(&mutation_tx, &stats, &config, &config.state_dir, paths).await;
             match result {
                 Ok(_count) => {
                     let s = stats.read().await;

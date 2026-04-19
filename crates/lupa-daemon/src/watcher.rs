@@ -11,7 +11,7 @@
 //! New directories discovered at runtime are scanned (to hydrate git-clone-
 //! style bursts) and watched.
 
-use crate::index_service::{IndexMutationTx, Mutation, fs_doc_id, index_file};
+use lupa_daemon::index_service::{IndexMutationTx, Mutation, fs_doc_id, index_file};
 use anyhow::Result;
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
