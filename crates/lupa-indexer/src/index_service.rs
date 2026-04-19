@@ -35,6 +35,9 @@ pub enum Mutation {
     Delete(String),
     UpsertMany(Vec<Document>),
     DeleteMany(Vec<String>),
+    DeleteSourceInstance {
+        instance_id: String,
+    },
     /// Reply woken with the commit generation once every prior mutation has
     /// been applied and a commit has completed.
     Barrier(oneshot::Sender<u64>),
@@ -200,6 +203,24 @@ async fn writer_loop(
                             }
                         }
                     }
+
+                    Mutation::DeleteSourceInstance { instance_id } => {
+                        if let Err(e) =
+                            apply_delete_source_instance(&shared, &mut writer, &instance_id).await
+                        {
+                            tracing::warn!(
+                                "IndexService: delete_source_instance {} failed: {}",
+                                instance_id,
+                                e
+                            );
+                        } else {
+                            tracing::info!(
+                                "IndexService: purged all docs for source instance {}",
+                                instance_id
+                            );
+                            dirty = true;
+                        }
+                    }
                 }
             }
 
@@ -241,6 +262,10 @@ async fn writer_loop(
                     let _ = apply_delete(&shared, &mut writer, id).await;
                     dirty = true;
                 }
+            }
+            Mutation::DeleteSourceInstance { instance_id } => {
+                let _ = apply_delete_source_instance(&shared, &mut writer, &instance_id).await;
+                dirty = true;
             }
             Mutation::Barrier(reply) => pending_barriers.push(reply),
             Mutation::CommitNow(reply) => pending_barriers.push(reply),
@@ -284,6 +309,16 @@ async fn apply_delete(
 ) -> Result<()> {
     let mut idx = shared.lock().await;
     idx.delete_by_id(id, writer)?;
+    Ok(())
+}
+
+async fn apply_delete_source_instance(
+    shared: &Arc<Mutex<LupaIndex>>,
+    writer: &mut TantivyIndexWriter<TantivyDoc>,
+    instance_id: &str,
+) -> Result<()> {
+    let mut idx = shared.lock().await;
+    idx.delete_by_source_instance(instance_id, writer)?;
     Ok(())
 }
 

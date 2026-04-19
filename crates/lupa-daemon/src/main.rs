@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 
-use lupa_indexer::gloda_poll;
+
 mod history;
 mod query_log;
 use history::ClickHistory;
@@ -139,10 +139,15 @@ async fn main() -> Result<()> {
     ));
 
     let index_path = config.state_dir.join("index");
-    let index = lupa_index::LupaIndex::create_or_open(index_path.to_str().unwrap())?;
+    let mut registry = lupa_indexer::SourceRegistry::new();
+    let sources_state_dir = config.state_dir.join("sources");
+    register_builtin_sources(&mut registry, &config, &sources_state_dir);
+    let index = lupa_index::LupaIndex::create_or_open_with_plugins(
+        index_path.to_str().unwrap(),
+        &registry.plugin_fields_by_kind,
+    )?;
 
     let stats = Arc::new(RwLock::new(IndexStats::default()));
-    let poll_state_dir = config.state_dir.clone();
     let state_dir = config.state_dir.clone();
     let watcher_roots = config.roots.clone();
     let watcher_exclude = config.exclude.clone();
@@ -206,20 +211,22 @@ async fn main() -> Result<()> {
         }
     });
 
-    if let Some(profile) = lupa_sources::gloda::GlodaSource::find_profile() {
-        let poll_mutation = mutation_tx.clone();
-        let poll_profile = profile.clone();
-        tokio::spawn(async move {
-            if let Err(e) = gloda_poll::start(poll_profile, poll_state_dir, poll_mutation).await {
-                tracing::error!("Gloda poll error: {}", e);
-            }
-        });
-        tracing::info!("Gloda poller started (30s interval)");
+    {
+        let sink = Arc::new(lupa_indexer::WriterSink::new(mutation_tx.clone()));
+        let tick_handles = lupa_indexer::tick_scheduler::spawn_all(&registry, sink);
+        tracing::info!(
+            "tick scheduler: {} source instance(s) with tick_interval",
+            tick_handles.len()
+        );
+        std::mem::forget(tick_handles);
+    }
 
+    let profile = lupa_sources::gloda::GlodaSource::find_profile();
+    if profile.is_some() {
         let apps = Arc::new(lupa_sources::apps::AppsSource::new());
         let attachments = Arc::new(
             lupa_sources::thunderbird_attachments::ThunderbirdAttachmentsSource::new(
-                profile,
+                profile.clone().unwrap(),
                 shared_config.max_file_size_mb * 1024 * 1024,
             ),
         );
@@ -601,4 +608,32 @@ async fn handle_client(
     stream.write_all(&out).await?;
 
     Ok(())
+}
+
+fn register_builtin_sources(
+    registry: &mut lupa_indexer::SourceRegistry,
+    config: &config::Config,
+    state_dir_root: &std::path::Path,
+) {
+    registry.register(
+        "builtin:apps".into(),
+        state_dir_root,
+        Arc::new(lupa_sources::apps::AppsSource::new()),
+    );
+
+    if let Some(profile) = lupa_sources::gloda::GlodaSource::find_profile() {
+        registry.register(
+            "builtin:gloda".into(),
+            state_dir_root,
+            Arc::new(lupa_sources::gloda::GlodaSource::new(profile, 0, 250)),
+        );
+    }
+
+    let fs = lupa_sources::fs::FsSource::with_regex(
+        config.roots.clone(),
+        config.exclude.clone(),
+        config.exclude_regex.clone(),
+        config.max_file_size_mb,
+    );
+    registry.register("builtin:fs".into(), state_dir_root, Arc::new(fs));
 }
