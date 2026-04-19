@@ -40,6 +40,7 @@
     background-color: transparent;
     border-top: 1px solid rgba(255, 255, 255, 0.04);
     padding-top: 4px;
+    min-height: 320px;
 }
 
 /* ----- Hit row ----- */

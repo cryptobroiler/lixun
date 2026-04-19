@@ -124,6 +124,7 @@ pub(crate) fn start_ipc_thread() -> IpcClient {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn send_record_query(q: &str) {
     let sock = socket_path();
     let req = Request::RecordQuery { q: q.to_string() };
