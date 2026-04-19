@@ -211,14 +211,38 @@ async fn main() -> Result<()> {
         }
     });
 
+    let indexer_sink = Arc::new(lupa_indexer::WriterSink::new(mutation_tx.clone()));
     {
-        let sink = Arc::new(lupa_indexer::WriterSink::new(mutation_tx.clone()));
-        let tick_handles = lupa_indexer::tick_scheduler::spawn_all(&registry, sink);
+        let tick_handles = lupa_indexer::tick_scheduler::spawn_all(&registry, indexer_sink.clone());
         tracing::info!(
             "tick scheduler: {} source instance(s) with tick_interval",
             tick_handles.len()
         );
         std::mem::forget(tick_handles);
+    }
+
+    for inst in &registry.instances {
+        if inst.source.kind() == "maildir" {
+            let instance_id = inst.instance_id.clone();
+            let state_dir_inst = inst.state_dir.clone();
+            let source = inst.source.clone();
+            let sink_for_task = indexer_sink.clone();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    let ctx = lupa_sources::source::SourceContext {
+                        instance_id: &instance_id,
+                        state_dir: &state_dir_inst,
+                    };
+                    source.reindex_full(&ctx, sink_for_task.as_ref())
+                })
+                .await;
+                match result {
+                    Ok(Ok(())) => tracing::info!("maildir initial reindex_full complete"),
+                    Ok(Err(e)) => tracing::warn!("maildir reindex_full failed: {}", e),
+                    Err(e) => tracing::error!("maildir reindex_full task panicked: {}", e),
+                }
+            });
+        }
     }
 
     let profile = lupa_sources::gloda::GlodaSource::find_profile();
@@ -636,4 +660,14 @@ fn register_builtin_sources(
         config.max_file_size_mb,
     );
     registry.register("builtin:fs".into(), state_dir_root, Arc::new(fs));
+
+    for md in &config.maildir {
+        let source = lupa_source_maildir::MaildirSource::new(md.paths.clone(), md.open_cmd.clone());
+        registry.register(md.id.clone(), state_dir_root, Arc::new(source));
+        tracing::info!(
+            "maildir source '{}' registered with {} root(s)",
+            md.id,
+            md.paths.len()
+        );
+    }
 }

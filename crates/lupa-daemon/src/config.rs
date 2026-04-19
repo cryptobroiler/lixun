@@ -13,6 +13,22 @@ struct ConfigToml {
     extractor_timeout_secs: Option<u64>,
     ranking: Option<RankingToml>,
     keybindings: Option<KeybindingsToml>,
+    #[serde(default)]
+    maildir: Vec<MaildirSourceToml>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MaildirSourceToml {
+    id: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    paths: Vec<String>,
+    #[serde(default)]
+    open_cmd: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +79,13 @@ pub struct Keybindings {
     pub global_toggle: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct MaildirConfig {
+    pub id: String,
+    pub paths: Vec<PathBuf>,
+    pub open_cmd: Vec<String>,
+}
+
 pub struct Config {
     pub roots: Vec<PathBuf>,
     pub exclude: Vec<String>,
@@ -75,6 +98,7 @@ pub struct Config {
     pub ranking_attachments: f32,
     pub keybindings: Keybindings,
     pub state_dir: PathBuf,
+    pub maildir: Vec<MaildirConfig>,
 }
 
 impl Default for Config {
@@ -92,6 +116,7 @@ impl Default for Config {
             ranking_attachments: 0.9,
             keybindings: Keybindings::default(),
             state_dir: state_dir(),
+            maildir: Vec::new(),
         }
     }
 }
@@ -235,6 +260,34 @@ impl Config {
             }
             if let Some(v) = bindings.global_toggle {
                 cfg.keybindings.global_toggle = v;
+            }
+        }
+
+        for md in parsed.maildir {
+            if !md.enabled {
+                continue;
+            }
+            if md.paths.is_empty() {
+                tracing::warn!(
+                    "config: skipping maildir source '{}': no paths configured",
+                    md.id
+                );
+                continue;
+            }
+            cfg.maildir.push(MaildirConfig {
+                id: md.id,
+                paths: md.paths.iter().map(|p| expand_tilde(p)).collect(),
+                open_cmd: md.open_cmd,
+            });
+        }
+
+        let mut seen_ids = std::collections::HashSet::new();
+        for md in &cfg.maildir {
+            if !seen_ids.insert(md.id.clone()) {
+                anyhow::bail!(
+                    "config: duplicate maildir source id '{}'; each [[maildir]] entry must have a unique id",
+                    md.id
+                );
             }
         }
 

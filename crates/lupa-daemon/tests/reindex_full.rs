@@ -16,6 +16,7 @@ fn test_config(root: std::path::PathBuf, state_dir: std::path::PathBuf) -> Confi
         ranking_attachments: 1.0,
         keybindings: Keybindings::default(),
         state_dir,
+        maildir: Vec::new(),
     }
 }
 

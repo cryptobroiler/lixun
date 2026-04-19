@@ -253,3 +253,32 @@ filter_files = "<Ctrl>2"
 filter_mail = "<Ctrl>3"
 filter_attachments = "<Ctrl>4"
 global_toggle = "Super+space"
+
+# ─── Maildir sources (optional) ───────────────────────────────────────
+#
+# Index messages from a maildir-format mail store (mutt/neomutt/notmuch/
+# offlineimap/isync/fdm/etc.). Each [[maildir]] block is one instance —
+# you can configure multiple if you have e.g. personal + work accounts
+# in separate maildir roots.
+#
+# Triggers a full index wipe + rebuild the first time you add, remove,
+# or change which maildir sources are enabled (schema fingerprint
+# changes).
+#
+# Search with typed fields:
+#   folder:INBOX
+#   flags:seen
+#   from:alice@example.com
+#
+# [[maildir]]
+# id = "personal-mail"
+# enabled = true
+# paths = ["~/Mail"]
+# # open_cmd placeholders: {folder}, {path}, {message_id}
+# open_cmd = ["neomutt", "-f", "{folder}"]
+#
+# [[maildir]]
+# id = "work-mail"
+# enabled = true
+# paths = ["~/.local/share/mail/work"]
+# open_cmd = ["aerc", "mailto:{message_id}"]

@@ -1,0 +1,19 @@
+[package]
+name = "lupa-source-maildir"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "lupa_source_maildir"
+path = "src/lib.rs"
+
+[dependencies]
+lupa-core = { path = "../lupa-core" }
+lupa-sources = { path = "../lupa-sources" }
+anyhow.workspace = true
+mailparse = "0.15"
+tracing.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

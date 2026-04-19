@@ -5,6 +5,7 @@ members = [
     "crates/lupa-index",
     "crates/lupa-extract",
     "crates/lupa-sources",
+    "crates/lupa-source-maildir",
     "crates/lupa-indexer",
     "crates/lupa-daemon",
     "crates/lupa-gui",
