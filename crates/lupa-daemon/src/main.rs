@@ -159,7 +159,10 @@ async fn main() -> Result<()> {
 
     let gui_state = Arc::new(RwLock::new(GuiState::default()));
 
-    let global_toggle_rx = hotkeys::spawn_global_toggle_listener(shared_config.keybindings.global_toggle.clone()).await;
+    let global_toggle_rx = hotkeys::spawn_global_toggle_listener(
+        shared_config.keybindings.global_toggle.clone(),
+        state_dir.clone(),
+    ).await;
     let mut global_toggle_rx = match global_toggle_rx {
         Ok(rx) => Some(rx),
         Err(e) => {
