@@ -321,6 +321,138 @@ impl crate::Source for GlodaSource {
     }
 }
 
+const GLODA_CURSOR_FILE: &str = "gloda_cursor.json";
+const GLODA_BATCH_LIMIT: u32 = 250;
+
+fn doc_gloda_id(doc: &Document) -> Option<u64> {
+    doc.id.0.strip_prefix("mail:").and_then(|s| s.parse().ok())
+}
+
+fn read_cursor(state_dir: &std::path::Path) -> u64 {
+    let path = state_dir.join(GLODA_CURSOR_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(s) => serde_json::from_str::<u64>(s.trim()).unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
+fn write_cursor(state_dir: &std::path::Path, last_key: u64) -> Result<()> {
+    let _ = std::fs::create_dir_all(state_dir);
+    let path = state_dir.join(GLODA_CURSOR_FILE);
+    std::fs::write(path, serde_json::to_string(&last_key)?)?;
+    Ok(())
+}
+
+impl crate::source::IndexerSource for GlodaSource {
+    fn kind(&self) -> &'static str {
+        "gloda"
+    }
+
+    fn tick_interval(&self) -> Option<Duration> {
+        Some(Duration::from_secs(30))
+    }
+
+    fn on_tick(
+        &self,
+        ctx: &crate::source::SourceContext,
+        sink: &dyn crate::source::MutationSink,
+    ) -> Result<()> {
+        let db_path = self.profile_path.join("global-messages-db.sqlite");
+        if !db_path.exists() {
+            return Ok(());
+        }
+
+        let cursor = read_cursor(ctx.state_dir);
+        let result: rusqlite::Result<Vec<Document>> = with_busy_retry(|| {
+            let conn = self.open_db()?;
+            query_messages(&conn, cursor, GLODA_BATCH_LIMIT)
+        });
+
+        let docs = match result {
+            Ok(d) => d,
+            Err(e) if is_busy(&e) => {
+                tracing::warn!("gloda busy after retries; deferring to next tick");
+                return Ok(());
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        if docs.is_empty() {
+            return Ok(());
+        }
+
+        let mut new_cursor = cursor;
+        for doc in docs {
+            if let Some(gid) = doc_gloda_id(&doc) {
+                new_cursor = new_cursor.max(gid);
+            }
+            let mut d = doc;
+            d.source_instance = ctx.instance_id.to_string();
+            sink.emit(crate::source::Mutation::Upsert(Box::new(d)))?;
+        }
+
+        if new_cursor > cursor {
+            let _ = write_cursor(ctx.state_dir, new_cursor);
+        }
+        Ok(())
+    }
+
+    fn reindex_full(
+        &self,
+        ctx: &crate::source::SourceContext,
+        sink: &dyn crate::source::MutationSink,
+    ) -> Result<()> {
+        sink.emit(crate::source::Mutation::DeleteSourceInstance {
+            instance_id: ctx.instance_id.to_string(),
+        })?;
+        let _ = std::fs::remove_file(ctx.state_dir.join(GLODA_CURSOR_FILE));
+
+        let db_path = self.profile_path.join("global-messages-db.sqlite");
+        if !db_path.exists() {
+            return Ok(());
+        }
+
+        let mut cursor: u64 = 0;
+        loop {
+            let c = cursor;
+            let result: rusqlite::Result<Vec<Document>> = with_busy_retry(|| {
+                let conn = self.open_db()?;
+                query_messages(&conn, c, GLODA_BATCH_LIMIT)
+            });
+            let docs = match result {
+                Ok(d) => d,
+                Err(e) if is_busy(&e) => {
+                    tracing::warn!("gloda busy during reindex_full; aborting this pass");
+                    return Ok(());
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            if docs.is_empty() {
+                break;
+            }
+
+            let mut new_cursor = cursor;
+            for doc in docs {
+                if let Some(gid) = doc_gloda_id(&doc) {
+                    new_cursor = new_cursor.max(gid);
+                }
+                let mut d = doc;
+                d.source_instance = ctx.instance_id.to_string();
+                sink.emit(crate::source::Mutation::Upsert(Box::new(d)))?;
+            }
+
+            if new_cursor == cursor {
+                break;
+            }
+            cursor = new_cursor;
+        }
+
+        let _ = write_cursor(ctx.state_dir, cursor);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
