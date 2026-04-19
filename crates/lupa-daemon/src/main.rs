@@ -1,5 +1,9 @@
 //! lupad — Lupa daemon: IPC server, indexer, filesystem watcher.
 
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use anyhow::Result;
 use bytes::{BufMut, BytesMut};
 use chrono::Utc;
