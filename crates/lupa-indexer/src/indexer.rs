@@ -8,8 +8,8 @@ use lupa_sources::Source;
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::config::Config;
 use crate::index_service::{IndexMutationTx, Mutation, SearchHandle};
+use crate::sources_api::IndexerSources;
 
 pub struct ReindexOutcome {
     pub total_docs: usize,
@@ -19,7 +19,7 @@ pub struct ReindexOutcome {
 
 pub async fn reindex_full(
     mutation_tx: &IndexMutationTx,
-    config: &Config,
+    config: &dyn IndexerSources,
     state_dir: &Path,
 ) -> Result<ReindexOutcome> {
     let state_dir_owned = state_dir.to_path_buf();
@@ -91,21 +91,21 @@ pub async fn reindex_full(
 
 pub async fn reindex_paths(
     mutation_tx: &IndexMutationTx,
-    config: &Config,
+    config: &dyn IndexerSources,
     paths: &[std::path::PathBuf],
 ) -> Result<usize> {
     let mut all_docs: Vec<Document> = Vec::new();
 
     for path in paths {
         if path.is_file() {
-            if let Ok(doc) = crate::index_service::index_file(path, config.max_file_size_mb) {
+            if let Ok(doc) = crate::index_service::index_file(path, config.max_file_size_mb()) {
                 all_docs.push(doc);
             }
         } else if path.is_dir() {
             let source = lupa_sources::fs::FsSource::new(
                 vec![path.clone()],
-                config.exclude.clone(),
-                config.max_file_size_mb,
+                config.exclude().to_vec(),
+                config.max_file_size_mb(),
             );
             all_docs.extend(source.index_all()?);
         }
@@ -120,7 +120,7 @@ pub async fn reindex_paths(
 pub async fn run_incremental(
     mutation_tx: &IndexMutationTx,
     search: &SearchHandle,
-    config: &Config,
+    config: &dyn IndexerSources,
     state_dir: &Path,
 ) -> Result<(usize, usize)> {
     let mut manifest = Manifest::load(state_dir);

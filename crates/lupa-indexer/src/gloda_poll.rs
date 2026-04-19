@@ -1,5 +1,5 @@
 use crate::cursors::Cursors;
-use lupa_daemon::index_service::{IndexMutationTx, Mutation};
+use crate::index_service::{IndexMutationTx, Mutation};
 use anyhow::Result;
 use lupa_sources::Source;
 use lupa_sources::gloda::GlodaSource;

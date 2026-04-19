@@ -1,0 +1,27 @@
+[package]
+name = "lupa-indexer"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "lupa_indexer"
+path = "src/lib.rs"
+
+[dependencies]
+lupa-core = { path = "../lupa-core" }
+lupa-extract = { path = "../lupa-extract" }
+lupa-index = { path = "../lupa-index" }
+lupa-sources = { path = "../lupa-sources" }
+anyhow.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+notify.workspace = true
+walkdir.workspace = true
+regex.workspace = true
+rusqlite = "0.31"
+async-channel = "2"
+
+[dev-dependencies]
+tempfile = "3"

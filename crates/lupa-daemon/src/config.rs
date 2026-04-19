@@ -270,6 +270,21 @@ impl Config {
     }
 }
 
+impl lupa_indexer::IndexerSources for Config {
+    fn build_fs_source(&self) -> Result<lupa_sources::fs::FsSource> {
+        Config::build_fs_source(self)
+    }
+    fn build_sources(&self) -> Result<Vec<Box<dyn lupa_sources::Source>>> {
+        Config::build_sources(self)
+    }
+    fn exclude(&self) -> &[String] {
+        &self.exclude
+    }
+    fn max_file_size_mb(&self) -> u64 {
+        self.max_file_size_mb
+    }
+}
+
 pub fn expand_tilde(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
         let home = std::env::var("HOME").unwrap_or_default();

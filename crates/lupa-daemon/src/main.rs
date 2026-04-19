@@ -14,8 +14,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 
-mod cursors;
-mod gloda_poll;
+use lupa_indexer::gloda_poll;
 mod history;
 mod query_log;
 use history::ClickHistory;
@@ -26,8 +25,8 @@ use lupa_daemon::hotkeys;
 use lupa_daemon::index_service::{self, IndexMutationTx, SearchHandle};
 use lupa_daemon::indexer;
 
-mod source_watcher;
-mod watcher;
+use lupa_indexer::source_watcher;
+use lupa_indexer::watcher;
 
 #[derive(Debug, Clone, Default)]
 struct IndexStats {
@@ -358,7 +357,7 @@ async fn run_incremental_indexer(
     config: Arc<config::Config>,
 ) -> Result<()> {
     let (fs_count, other_count) =
-        indexer::run_incremental(&mutation_tx, &search, &config, &state_dir).await?;
+        indexer::run_incremental(&mutation_tx, &search, config.as_ref(), &state_dir).await?;
     let total = fs_count + other_count;
     if total > 0 {
         let mut stats_lock = stats.write().await;
