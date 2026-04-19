@@ -358,6 +358,53 @@ impl crate::Source for FsSource {
     }
 }
 
+impl crate::source::IndexerSource for FsSource {
+    fn kind(&self) -> &'static str {
+        "fs"
+    }
+
+    fn watch_paths(
+        &self,
+        _ctx: &crate::source::SourceContext,
+    ) -> Result<Vec<crate::source::WatchSpec>> {
+        Ok(self
+            .roots
+            .iter()
+            .map(|p| crate::source::WatchSpec {
+                path: p.clone(),
+                recursive: true,
+            })
+            .collect())
+    }
+
+    fn reindex_full(
+        &self,
+        ctx: &crate::source::SourceContext,
+        sink: &dyn crate::source::MutationSink,
+    ) -> Result<()> {
+        let manifest_path = ctx.state_dir.join("manifest.json");
+        let _ = std::fs::remove_file(&manifest_path);
+
+        let mut manifest = Manifest::default();
+        let empty_ids: HashSet<String> = HashSet::new();
+
+        let deleted = self.index_incremental_batched(&mut manifest, &empty_ids, |batch| {
+            for mut doc in batch {
+                doc.source_instance = ctx.instance_id.to_string();
+                sink.emit(crate::source::Mutation::Upsert(Box::new(doc)))?;
+            }
+            Ok(())
+        })?;
+
+        for id in deleted {
+            sink.emit(crate::source::Mutation::Delete { doc_id: id })?;
+        }
+
+        manifest.save(ctx.state_dir);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,16 +7,18 @@ pub mod gloda;
 pub mod manifest;
 pub mod mbox;
 pub mod mime_icons;
+pub mod source;
 pub mod thunderbird_attachments;
 
 use anyhow::Result;
 use lupa_core::Document;
 
-/// A data source that yields documents.
-pub trait Source {
-    /// Name of this source (for logging).
-    fn name(&self) -> &'static str;
+pub use source::{
+    IndexerSource, Mutation, MutationSink, SourceContext, SourceEvent, SourceEventKind, WatchSpec,
+};
 
-    /// Index all documents from this source.
+/// Legacy trait — will be removed after all built-ins migrate to `IndexerSource`.
+pub trait Source {
+    fn name(&self) -> &'static str;
     fn index_all(&self) -> Result<Vec<Document>>;
 }
