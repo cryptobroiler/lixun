@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 const DEBOUNCE: Duration = Duration::from_millis(2000);
 const PER_INSTANCE_COOLDOWN: Duration = Duration::from_secs(5);
+const EVENT_CHANNEL_CAP: usize = 1024;
 
 pub async fn start(registry: Arc<SourceRegistry>, sink: Arc<WriterSink>) -> Result<()> {
     let mut route: HashMap<PathBuf, (usize, bool)> = HashMap::new();
@@ -51,12 +52,23 @@ pub async fn start(registry: Arc<SourceRegistry>, sink: Arc<WriterSink>) -> Resu
         return Ok(());
     }
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Event>(EVENT_CHANNEL_CAP);
     let tx_cb = tx.clone();
+    let dropped_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let dropped_cb = Arc::clone(&dropped_counter);
     let mut watcher = RecommendedWatcher::new(
         move |res: notify::Result<Event>| {
-            if let Ok(event) = res {
-                let _ = tx_cb.send(event);
+            if let Ok(event) = res
+                && let Err(tokio::sync::mpsc::error::TrySendError::Full(_)) = tx_cb.try_send(event)
+            {
+                let prev = dropped_cb.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if prev == 0 || prev.is_multiple_of(100) {
+                    tracing::warn!(
+                        "plugin fs watcher: event queue full (cap={}), dropping event (total dropped={})",
+                        EVENT_CHANNEL_CAP,
+                        prev + 1
+                    );
+                }
             }
         },
         Config::default(),
