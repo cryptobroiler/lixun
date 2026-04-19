@@ -23,6 +23,9 @@ const PER_INSTANCE_COOLDOWN: Duration = Duration::from_secs(5);
 pub async fn start(registry: Arc<SourceRegistry>, sink: Arc<WriterSink>) -> Result<()> {
     let mut route: HashMap<PathBuf, (usize, bool)> = HashMap::new();
     for (idx, inst) in registry.instances.iter().enumerate() {
+        if inst.source.kind() == "fs" {
+            continue;
+        }
         let ctx = SourceContext {
             instance_id: &inst.instance_id,
             state_dir: &inst.state_dir,
