@@ -23,10 +23,13 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     let ipc = start_ipc_thread();
     let daemon_config = lixun_daemon::config::Config::load()?;
 
+    // No default_height: layer-shell anchors top/left/right only, so the
+    // window surface must size to content. A default_height would pin the
+    // surface at that height regardless of hidden children, preventing
+    // the empty-results collapse (G0.2).
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .default_width(720)
-        .default_height(560)
         .decorated(false)
         .build();
 
@@ -95,7 +98,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     vbox.append(&chips.container);
 
     let scrolled = gtk::ScrolledWindow::builder()
-        .vexpand(true)
+        .vexpand(false)
         .min_content_height(320)
         .max_content_height(520)
         .build();
@@ -183,22 +186,26 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
             if let Some(calc) = calc_snapshot.as_ref() {
                 chips_for_poll.set_visible(true);
                 scrolled_for_poll.set_visible(false);
+                scrolled_for_poll.set_vexpand(false);
                 status_for_poll.show_calculation(calc);
             } else if hits_snapshot.is_empty() {
                 let q = last_query_poll_clone.borrow().clone();
                 if !q.is_empty() {
                     chips_for_poll.set_visible(true);
                     scrolled_for_poll.set_visible(false);
+                    scrolled_for_poll.set_vexpand(false);
                     status_for_poll.show_empty(&q);
                     selection_for_empty.set_selected(gtk::INVALID_LIST_POSITION);
                 } else {
                     chips_for_poll.set_visible(false);
                     scrolled_for_poll.set_visible(false);
+                    scrolled_for_poll.set_vexpand(false);
                     status_for_poll.hide();
                 }
             } else {
                 chips_for_poll.set_visible(true);
                 scrolled_for_poll.set_visible(true);
+                scrolled_for_poll.set_vexpand(true);
                 status_for_poll.hide();
             }
         }
@@ -228,6 +235,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
             }
             chips_for_entry.set_visible(false);
             scrolled_for_entry.set_visible(false);
+            scrolled_for_entry.set_vexpand(false);
             status_for_entry.hide();
             return;
         }
