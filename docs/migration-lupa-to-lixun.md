@@ -37,16 +37,28 @@ mv ~/.local/state/lupa             ~/.local/state/lixun    2>/dev/null || true
 mv ~/.cache/lupa-runtime           ~/.cache/lixun-runtime  2>/dev/null || true
 ```
 
-Rebind the KDE global hotkey (KDE portal remembers the old `lupa` app id):
+Rebind the KDE global hotkey. Two stale pieces of state need removing —
+the daemon persists its portal session_handle_token on disk (so the session
+survives restarts), and KDE caches the shortcut binding under that token:
 
 ```
-systemctl --user restart xdg-desktop-portal.service
+# 1. remove the old persistent session token (carries lupa_* prefix)
+rm ~/.local/state/lixun/global_shortcuts_token
+
+# 2. remove the stale KDE shortcut binding tied to the old token
+sed -i '/^\[token_lupa_/,/^$/d' ~/.config/kglobalshortcutsrc
+
+# 3. restart portal and daemon so a fresh session is negotiated
+systemctl --user restart plasma-xdg-desktop-portal-kde.service
 systemctl --user restart lixund.service
 ```
 
-Then open System Settings → Shortcuts → Global Shortcuts, remove any stale
-`Lupa` entry, and retrigger the Super+Space binding from a fresh `lixund`
-session (see `crates/lixun-daemon/src/hotkeys.rs` for wire protocol).
+On next start `lixund` generates a fresh `lixun_<16 chars>` token and KDE
+will show the "Allow shortcut" dialog for Super+Space.
+
+If you skip step 1, `lixund` reuses the old `lupa_*` token — the portal
+then matches it against the cached KDE binding (step 2 target) and silently
+re-attaches without asking.
 
 ## What changed
 
