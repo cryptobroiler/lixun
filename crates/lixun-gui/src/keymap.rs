@@ -158,11 +158,15 @@ pub(crate) fn install_keyboard_handler(
                     if entry.text().is_empty() && entry_has_focus(&entry, &window) {
                         return glib::signal::Propagation::Proceed;
                     }
+                    let entry_had_focus = entry_has_focus(&entry, &window);
                     if ctrl {
                         jump_to_next_category(&selection, &filter_model, -1);
                         let target = selection.selected();
                         if target != gtk::INVALID_LIST_POSITION {
-                            list_view.scroll_to(target, gtk::ListScrollFlags::NONE, None);
+                            list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
+                        }
+                        if entry_had_focus {
+                            list_view.grab_focus();
                         }
                         return glib::signal::Propagation::Stop;
                     }
@@ -170,15 +174,25 @@ pub(crate) fn install_keyboard_handler(
                     if current > 0 {
                         let target = current - 1;
                         selection.set_selected(target);
-                        list_view.scroll_to(target, gtk::ListScrollFlags::NONE, None);
+                        list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
+                        if entry_had_focus {
+                            list_view.grab_focus();
+                        }
+                    } else {
+                        // Already at the top row; Up returns focus to the Entry.
+                        entry.grab_focus();
                     }
                     glib::signal::Propagation::Stop
             } else if accel_matches(&keybindings.next_result, key, state) {
+                    let entry_had_focus = entry_has_focus(&entry, &window);
                     if ctrl {
                         jump_to_next_category(&selection, &filter_model, 1);
                         let target = selection.selected();
                         if target != gtk::INVALID_LIST_POSITION {
-                            list_view.scroll_to(target, gtk::ListScrollFlags::NONE, None);
+                            list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
+                        }
+                        if entry_had_focus {
+                            list_view.grab_focus();
                         }
                         return glib::signal::Propagation::Stop;
                     }
@@ -187,7 +201,10 @@ pub(crate) fn install_keyboard_handler(
                     if current + 1 < n {
                         let target = current + 1;
                         selection.set_selected(target);
-                        list_view.scroll_to(target, gtk::ListScrollFlags::NONE, None);
+                        list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
+                    }
+                    if entry_had_focus && n > 0 {
+                        list_view.grab_focus();
                     }
                     glib::signal::Propagation::Stop
             } else if accel_matches(&keybindings.close, key, state) {
