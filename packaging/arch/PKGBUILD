@@ -1,6 +1,6 @@
 # Maintainer: Шабилиск <shabi@dkp.hk>
 pkgname=lupa-bin
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Spotlight-like launcher for Linux (pre-built binary)"
 arch=("x86_64")
