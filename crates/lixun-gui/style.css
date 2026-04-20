@@ -61,9 +61,13 @@ row:selected .lixun-hit,
     background-color: rgba(75, 141, 255, 0.22);
 }
 
+/* Keyboard focus ring on the selected list row. Uses a distinct
+   brighter hue from `row:selected` tint so it reads as a ring on top
+   of the selection fill — picking the same blue as the fill made the
+   ring invisible in earlier iterations. */
 row:focus-within .lixun-hit,
 .lixun-hit:focus-within {
-    outline: 2px solid rgba(75, 141, 255, 0.7);
+    outline: 2px solid rgba(130, 180, 255, 0.95);
     outline-offset: -2px;
 }
 
