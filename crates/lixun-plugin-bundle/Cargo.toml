@@ -1,0 +1,17 @@
+[package]
+name = "lixun-plugin-bundle"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "lixun_plugin_bundle"
+path = "src/lib.rs"
+
+[features]
+default = ["maildir", "thunderbird"]
+maildir = ["dep:lixun-source-maildir"]
+thunderbird = ["dep:lixun-source-thunderbird"]
+
+[dependencies]
+lixun-source-maildir = { path = "../lixun-source-maildir", optional = true }
+lixun-source-thunderbird = { path = "../lixun-source-thunderbird", optional = true }

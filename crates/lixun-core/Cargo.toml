@@ -1,0 +1,11 @@
+[package]
+name = "lixun-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

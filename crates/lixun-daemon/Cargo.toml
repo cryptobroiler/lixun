@@ -1,0 +1,53 @@
+[package]
+name = "lixun-daemon"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "lixund"
+path = "src/main.rs"
+
+[lib]
+name = "lixun_daemon"
+path = "src/lib.rs"
+
+[dependencies]
+lixun-core = { path = "../lixun-core" }
+lixun-extract = { path = "../lixun-extract" }
+lixun-ipc = { path = "../lixun-ipc" }
+lixun-index = { path = "../lixun-index" }
+lixun-sources = { path = "../lixun-sources" }
+lixun-plugin-bundle = { path = "../lixun-plugin-bundle" }
+lixun-indexer = { path = "../lixun-indexer" }
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+notify.workspace = true
+walkdir.workspace = true
+bytes.workspace = true
+rayon.workspace = true
+regex.workspace = true
+dirs = "5"
+toml = "0.8"
+libc = "0.2"
+signal-hook = "0.3"
+signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
+futures = "0.3"
+async-channel = "2"
+ashpd = { version = "0.13", features = ["tokio", "global_shortcuts"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+getrandom = "0.3"
+
+# jemalloc: bounds VmPeak on a long-lived daemon by aggressively returning
+# freed pages to the kernel. Glibc malloc retains arenas (~64 MiB each) and
+# inflated VmPeak to ~4.4 GiB in heaptrack profiling despite peak heap
+# consumption of only 292 MiB.
+[target.'cfg(target_os = "linux")'.dependencies]
+tikv-jemallocator = "0.6"
+
+[dev-dependencies]
+tempfile = "3"

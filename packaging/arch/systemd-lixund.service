@@ -1,0 +1,12 @@
+[Unit]
+Description=Lixun Search Daemon
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/lixund
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=default.target

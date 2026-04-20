@@ -1,0 +1,322 @@
+# Example configuration for lixun.
+#
+# Copy to ~/.config/lixun/config.toml and adjust to taste.
+# Every section below is optional; missing fields fall back to defaults.
+
+# Maximum file size to extract text from, in MiB.
+# Files larger than this are still indexed by name/metadata.
+max_file_size_mb = 50
+
+# Hard timeout per extractor invocation (pdftotext, libreoffice, catdoc).
+extractor_timeout_secs = 15
+
+# Additional substring excludes. Matched against the full path.
+# These are ADDED on top of the built-in defaults (.cache, .git, node_modules,
+# target, .venv, __pycache__, .thunderbird, .swp, .swo, .swx, etc).
+exclude = [
+    # KDE/GNOME runtime state that changes every few seconds
+    ".local/share/baloo",
+    ".local/share/akonadi",
+    ".local/share/kactivitymanagerd",
+    ".local/share/klipper",
+    ".local/share/RecentDocuments",
+    ".local/share/Nextcloud",
+
+    # Browser profiles - multi-GB caches, cookies, service workers
+    ".mozilla",
+    ".zen",
+    ".config/google-chrome",
+    ".config/chromium",
+    ".config/BraveSoftware",
+    ".config/vivaldi",
+
+    # Electron app config (each ships its own Chromium cache)
+    ".config/Code",
+    ".config/VSCodium",
+    ".config/Slack",
+    ".config/discord",
+    ".config/Bitwarden",
+    ".config/obsidian",
+
+    # Secret stores - do not index principally
+    ".password-store",
+    ".gnupg",
+    ".ssh",
+
+    # Nextcloud sync journals
+    "Nextcloud/.sync_",
+
+    # Git internals - pack objects are not useful for full-text search
+    ".git/objects",
+    ".git/lfs",
+
+    # Build artifacts outside the default "target"
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".turbo",
+    ".parcel-cache",
+    ".gradle",
+    ".mvn",
+    "CMakeFiles",
+
+    # Language package caches
+    ".cargo/registry",
+    ".rustup",
+    ".bun",
+    ".npm",
+    ".yarn",
+    ".pnpm",
+    ".deno",
+    ".pub-cache",
+    ".m2/repository",
+    ".nvm",
+    ".rbenv",
+    ".pyenv",
+    ".poetry",
+    "go/pkg/mod",
+
+    # Container / VM runtime
+    ".docker",
+    ".podman",
+    ".local/share/containers",
+    ".vagrant.d",
+
+    # Flatpak / Snap
+    ".local/share/flatpak",
+    "snap/",
+
+    # IDE state
+    ".idea",
+    ".vscode",
+    ".cursor",
+    ".fleet",
+
+    # Systemd / journal
+    ".local/share/systemd",
+
+    # Crash dumps
+    ".xsession-errors",
+    "core.",
+
+    # AI tool state
+    ".local/share/opencode",
+    ".local/share/aichat",
+    ".continue",
+    ".ollama",
+
+    # Steam / gaming
+    ".local/share/Steam",
+    ".steampath",
+
+    # Wine / Proton
+    ".wine",
+    ".PlayOnLinux",
+
+    # Keyrings
+    ".local/share/kwalletd",
+    ".local/share/keyrings",
+
+    # Thumbnails
+    ".thumbnails",
+]
+
+# Regex-based excludes. Each pattern is matched against the full path string.
+# Invalid patterns are logged at error level and dropped; the daemon keeps
+# running with the valid ones.
+exclude_regex = [
+    # LibreOffice / Office lock files
+    '\.~lock\..*#$',
+    '~\$.*\.docx?$',
+    '~\$.*\.xlsx?$',
+    '~\$.*\.pptx?$',
+
+    # Compiled / intermediate artifacts
+    '\.pyc$',
+    '\.pyo$',
+    '\.class$',
+    '\.o$',
+    '\.obj$',
+    '\.d$',
+    '\.rlib$',
+    '\.rmeta$',
+    '\.a$',
+    '\.so(\.\d+)*$',
+    '\.dylib$',
+    '\.dll$',
+    '\.pdb$',
+
+    # Minified / bundled output
+    '\.min\.js$',
+    '\.min\.css$',
+    '\.bundle\.js$',
+    '\.chunk\.js$',
+    '\.map$',
+    '\.tsbuildinfo$',
+
+    # Rotated logs
+    '\.log\.\d+(\.gz|\.bz2|\.xz)?$',
+    '\.log\.gz$',
+
+    # Backups / editor autosaves
+    '\.bak$',
+    '\.backup$',
+    '\.old$',
+    '\.orig$',
+    '~$',
+    '#.*#$',
+
+    # Partial downloads / temp
+    '\.crdownload$',
+    '\.part$',
+    '\.partial$',
+    '\.tmp$',
+    '\.temp$',
+    '\.!qB$',
+
+    # OS-level junk
+    '/\.DS_Store$',
+    '/Thumbs\.db$',
+    '/desktop\.ini$',
+
+    # SQLite journals (churn every second)
+    '\.sqlite-wal$',
+    '\.sqlite-shm$',
+    '\.db-wal$',
+    '\.db-shm$',
+    '\.db-journal$',
+
+    # Lock files (the filesystem primitive, not code)
+    '/flock$',
+    '/\.lock$',
+
+    # Cargo target anywhere (stricter than the default "target" substring)
+    '/target/(debug|release|tmp|doc|package)/',
+
+    # Python tool state
+    '\.egg-info/',
+    '\.tox/',
+    '\.pytest_cache/',
+    '\.mypy_cache/',
+    '\.ruff_cache/',
+
+    # Jupyter checkpoints
+    '/\.ipynb_checkpoints/',
+
+    # Git pack-files
+    '/\.git/objects/pack/',
+
+    # Container image layers
+    '/overlay2/',
+    '/diff/',
+
+    # File-sync version histories
+    '/\.stversions/',
+    '/\.sync/',
+
+    # Large binary media (body is not extracted; names rarely searched)
+    '\.(mp4|mkv|avi|mov|webm|flv|wmv)$',
+    '\.(mp3|flac|ogg|m4a|opus|wav)$',
+    '\.(iso|img|vmdk|qcow2|vdi)$',
+
+    # Archives
+    '\.(zip|tar\.gz|tar\.bz2|tar\.xz|tgz|tbz2|txz|7z|rar)$',
+
+    # Fonts
+    '\.(ttf|otf|woff|woff2|eot)$',
+]
+
+# Ranking weights: how much each source category is boosted in search scores.
+[ranking]
+apps = 1.3
+files = 1.2
+mail = 1.0
+attachments = 0.9
+
+# Keybindings - GTK accelerator syntax (<Ctrl>c, <Shift>Return, etc).
+[keybindings]
+close = "Escape"
+primary_action = "Return"
+secondary_action = "<Shift>Return"
+copy = "<Ctrl>c"
+quick_look = "space"
+history_up = "Up"
+next_result = "Down"
+previous_result = "Up"
+next_category = "<Ctrl>Down"
+previous_category = "<Ctrl>Up"
+filter_all = "<Ctrl>0"
+filter_apps = "<Ctrl>1"
+filter_files = "<Ctrl>2"
+filter_mail = "<Ctrl>3"
+filter_attachments = "<Ctrl>4"
+#
+# global_toggle values follow the XDG shortcuts specification:
+# modifiers are CTRL, ALT, SHIFT, NUM, LOGO (joined with +), followed by an
+# xkbcommon keysym name. Common aliases are accepted and normalized:
+# Super/Meta/Win -> LOGO, Control -> CTRL. If KDE Plasma rejects your
+# shortcut, write it in spec form: "LOGO+space".
+global_toggle = "Super+space"
+
+# ─── Maildir sources ──────────────────────────────────────────────────
+#
+# Presence of this section = plugin loaded. Omit to skip.
+#
+# Index messages from a maildir-format mail store (mutt/neomutt/notmuch/
+# offlineimap/isync/fdm/etc.). Each [[maildir]] block is one instance —
+# you can configure multiple if you have e.g. personal + work accounts
+# in separate maildir roots.
+#
+# Triggers a full index wipe + rebuild the first time you add, remove,
+# or change which maildir sources are enabled (schema fingerprint
+# changes).
+#
+# Search with typed fields:
+#   folder:INBOX
+#   flags:seen
+#   from:alice@example.com
+#
+# [[maildir]]
+# id = "personal-mail"
+# enabled = true
+# paths = ["~/Mail"]
+# # open_cmd placeholders: {folder}, {path}, {message_id}
+# open_cmd = ["neomutt", "-f", "{folder}"]
+#
+# [[maildir]]
+# id = "work-mail"
+# enabled = true
+# paths = ["~/.local/share/mail/work"]
+# open_cmd = ["aerc", "mailto:{message_id}"]
+
+# ─── Thunderbird source ───────────────────────────────────────────────
+#
+# Presence of this section = plugin loaded. Omit to skip.
+#
+# When the section is present and a Thunderbird profile can be located
+# (either via the `profile` field below or by auto-detecting
+# ~/.thunderbird/), Lixun registers two source instances:
+# builtin:gloda (SQLite messages: subject, sender, recipients, body
+# snippet) and builtin:tb_attachments (mbox-level attachment text).
+#
+# [thunderbird]
+# enabled = true
+#
+# # Override auto-detection (useful if you have multiple profiles and
+# # the default one isn't what you want Lixun to index). Must be the
+# # full profile dir containing global-messages-db.sqlite and Mail/.
+# # If the path does not exist, the plugin logs a warn and registers
+# # no sources — the rest of the daemon continues to run.
+# # profile = "~/.thunderbird/work.default-release"
+#
+# # How many gloda messages to ingest per 30s tick. Default 250.
+# # Raise to ~1000 on very large mailboxes if initial catch-up is slow;
+# # lower if you want to cap per-tick I/O more aggressively.
+# # gloda_batch_size = 250
+#
+# # Index mbox attachment content (PDFs, docs inside .eml). Disable if
+# # your mailbox is huge and search across attachment bodies isn't worth
+# # the disk I/O; gloda message search continues to work either way.
+# # attachments = true

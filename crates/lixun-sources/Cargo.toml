@@ -1,0 +1,23 @@
+[package]
+name = "lixun-sources"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lixun-core = { path = "../lixun-core" }
+lixun-extract = { path = "../lixun-extract" }
+anyhow.workspace = true
+walkdir.workspace = true
+notify.workspace = true
+rayon.workspace = true
+num_cpus.workspace = true
+regex.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml = "0.8"
+inventory.workspace = true
+mime_guess = "2"
+
+[dev-dependencies]
+tempfile.workspace = true

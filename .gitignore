@@ -1,0 +1,18 @@
+/target
+Cargo.lock
+
+# Arch packaging build output (do not commit — artifacts are rebuilt)
+/packaging/arch/pkg/
+/packaging/arch/src/
+/packaging/arch/*.pkg.tar.zst
+/packaging/arch/lixun-*.tar.gz
+/packaging/arch/lupa-*.tar.gz
+/packaging/arch/releases/lixun-*/
+/packaging/arch/releases/lupa-*/
+
+# local tooling agent workspace (plans, notepads, transcripts — local only)
+/.local/
+
+# Local reference documents (PDFs, etc.) used for design research
+/docs/references/
+

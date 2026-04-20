@@ -1,0 +1,25 @@
+[package]
+name = "lixun-gui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lixun-core = { path = "../lixun-core" }
+lixun-ipc = { path = "../lixun-ipc" }
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true
+dirs = "5"
+glib = "0.20"
+gtk = { package = "gtk4", version = "0.9", features = ["v4_12"] }
+gtk4-layer-shell = "0.5"
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+base64 = "0.22"
+quoted_printable = "0.5"
+opener = "0.8"
+lixun-daemon = { path = "../lixun-daemon" }
+
+[lib]
+name = "lixun_gui"
+path = "src/lib.rs"

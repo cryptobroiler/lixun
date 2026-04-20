@@ -1,0 +1,27 @@
+# Maintainer: Шабилиск <shabi@dkp.hk>
+pkgname=lixun-bin
+pkgver=0.3.0
+pkgrel=1
+pkgdesc="Spotlight-like launcher for Linux (pre-built binary)"
+arch=("x86_64")
+url="https://repo.dkp.hk/denis/lixun"
+license=("MIT")
+depends=("gtk4" "gtk4-layer-shell" "poppler" "zstd" "sqlite")
+optdepends=("antiword: .doc extraction"
+            "catdoc: .doc extraction"
+            "libreoffice-fresh: .docx/.xlsx/.pptx extraction")
+provides=("lixun")
+conflicts=("lixun" "lupa" "lupa-bin")
+
+# Local tarball — replace with release URL for distribution:
+# source=("https://repo.dkp.hk/lixun/lixun-${pkgver}-x86_64.tar.gz")
+source=("lixun-${pkgver}-x86_64.tar.gz::file:///home/cryptobroiler/Developer/lupa/packaging/arch/lixun-${pkgver}-x86_64.tar.gz" "systemd-lixund.service" "lixun.desktop")
+md5sums=("SKIP" "SKIP" "SKIP")
+
+package() {
+  install -Dm755 "lixund" "$pkgdir/usr/bin/lixund"
+  install -Dm755 "lixun" "$pkgdir/usr/bin/lixun"
+  install -Dm755 "lixun-gui" "$pkgdir/usr/bin/lixun-gui"
+  install -Dm644 "${srcdir}/systemd-lixund.service" "$pkgdir/usr/lib/systemd/user/lixund.service"
+  install -Dm644 "${srcdir}/lixun.desktop" "$pkgdir/usr/share/applications/lixun.desktop"
+}
