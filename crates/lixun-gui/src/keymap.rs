@@ -89,6 +89,36 @@ fn accel_matches(accel: &str, key: gtk::gdk::Key, state: gtk::gdk::ModifierType)
     key == expected_key && state.contains(expected_mods)
 }
 
+/// True when the Entry or any of its descendants (the internal GtkText
+/// delegate that actually owns keyboard focus) is the focused widget.
+/// `gtk::Entry::is_focus()` returns false in that case because Entry is a
+/// composite: GtkText is a child widget, not the Entry itself. Without
+/// this helper our key dispatch would treat a typing Entry as unfocused
+/// and swallow Space into `quick_look`.
+fn entry_has_focus(entry: &gtk::Entry, window: &gtk::ApplicationWindow) -> bool {
+    let Some(focus) = gtk::prelude::RootExt::focus(window) else {
+        return false;
+    };
+    let entry_widget = entry.upcast_ref::<gtk::Widget>();
+    &focus == entry_widget || focus.is_ancestor(entry)
+}
+
+/// Key should be forwarded to a focused text input instead of intercepted
+/// by window-level shortcut dispatch. Shift alone is allowed (capitals);
+/// Ctrl/Alt/Super/Meta/Hyper disqualify. Keys without a non-control
+/// Unicode mapping (Escape, Return, arrows, Tab, F-keys) also disqualify.
+fn is_printable_key(key: gtk::gdk::Key, state: gtk::gdk::ModifierType) -> bool {
+    let non_shift_mods = gtk::gdk::ModifierType::CONTROL_MASK
+        | gtk::gdk::ModifierType::ALT_MASK
+        | gtk::gdk::ModifierType::SUPER_MASK
+        | gtk::gdk::ModifierType::META_MASK
+        | gtk::gdk::ModifierType::HYPER_MASK;
+    if state.intersects(non_shift_mods) {
+        return false;
+    }
+    matches!(key.to_unicode(), Some(c) if !c.is_control())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn install_keyboard_handler(
     window: &gtk::ApplicationWindow,
@@ -115,11 +145,17 @@ pub(crate) fn install_keyboard_handler(
         #[strong] chips,
         #[strong] keybindings,
         move |_, key, _keycode, state| {
+            // Hard rule: printable unmodified keys belong to the focused
+            // Entry. Forward them before any accel dispatch can swallow
+            // them (e.g. bare-Space `quick_look` binding).
+            if entry_has_focus(&entry, &window) && is_printable_key(key, state) {
+                return glib::signal::Propagation::Proceed;
+            }
             let ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
             let shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
             if accel_matches(&keybindings.previous_result, key, state) {
                     // Up on empty entry = let entry_key_controller handle history
-                    if entry.text().is_empty() && entry.is_focus() {
+                    if entry.text().is_empty() && entry_has_focus(&entry, &window) {
                         return glib::signal::Propagation::Proceed;
                     }
                     if ctrl {
@@ -186,7 +222,7 @@ pub(crate) fn install_keyboard_handler(
             } else if accel_matches(&keybindings.copy, key, state) {
                     selected_hit_in(&selection, &filter_model, copy_to_clipboard);
                     glib::signal::Propagation::Stop
-            } else if accel_matches(&keybindings.quick_look, key, state) && !entry.is_focus() {
+            } else if accel_matches(&keybindings.quick_look, key, state) && !entry_has_focus(&entry, &window) {
                     // Only trigger quick_look when focus is NOT in entry (i.e. list is focused)
                     // This allows space to be typed in the entry
                     selected_hit_in(&selection, &filter_model, |hit| {

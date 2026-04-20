@@ -264,12 +264,19 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
 
     let focus_ctrl = gtk::EventControllerFocus::new();
     let window_for_focus = window.clone();
+    // Layer-shell OnDemand hands us keyboard focus asynchronously; re-grab
+    // Entry on focus-enter so Space/printables reach it, not window accels.
+    let entry_for_focus_enter = entry.clone();
+    focus_ctrl.connect_enter(move |_| {
+        entry_for_focus_enter.grab_focus();
+    });
     focus_ctrl.connect_leave(move |_| {
         animate_hide(&window_for_focus);
     });
     window.add_controller(focus_ctrl);
 
     animate_show(&window);
+    entry.grab_focus();
 
     tracing::info!("Lixun GUI window shown");
     Ok(())
