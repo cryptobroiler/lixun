@@ -1,5 +1,6 @@
 pub mod config;
 pub mod hotkeys;
+pub mod session_env;
 
 pub use lupa_indexer::index_service;
 pub use lupa_indexer::indexer;

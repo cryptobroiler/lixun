@@ -24,6 +24,7 @@ use lupa_daemon::config;
 use lupa_daemon::hotkeys;
 use lupa_daemon::index_service::{self, IndexMutationTx, SearchHandle};
 use lupa_daemon::indexer;
+use lupa_daemon::session_env;
 
 use lupa_indexer::plugin_fs_watcher;
 use lupa_indexer::watcher;
@@ -70,16 +71,46 @@ fn process_alive(pid: u32) -> bool {
 fn spawn_gui(
     gui_state: Arc<RwLock<GuiState>>,
 ) -> anyhow::Result<u32> {
-    let mut child = tokio::process::Command::new("lupa-gui").spawn()?;
+    let mut cmd = tokio::process::Command::new("lupa-gui");
+    let env = session_env::discover_gui_env();
+    for (k, v) in &env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn()?;
     let pid = child
         .id()
         .ok_or_else(|| anyhow::anyhow!("spawned lupa-gui has no pid"))?;
+    tracing::info!(
+        "spawn_gui: lupa-gui started pid={} env_keys={:?}",
+        pid,
+        env.keys().collect::<Vec<_>>()
+    );
     tokio::spawn(async move {
-        let _ = child.wait().await;
+        let status = child.wait().await;
         let mut state = gui_state.write().await;
         if state.pid == Some(pid) {
             state.pid = None;
             state.visible = false;
+        }
+        match status {
+            Ok(s) if !s.success() => {
+                tracing::warn!(
+                    "spawn_gui: lupa-gui pid={} exited with {:?}",
+                    pid, s
+                );
+            }
+            Ok(s) => {
+                tracing::debug!(
+                    "spawn_gui: lupa-gui pid={} exited ok ({:?})",
+                    pid, s
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "spawn_gui: lupa-gui pid={} wait failed: {}",
+                    pid, e
+                );
+            }
         }
     });
     Ok(pid)
@@ -274,22 +305,30 @@ async fn main() -> Result<()> {
     #[allow(unreachable_code)]
     loop {
         tokio::select! {
-            _ = async {
+            hotkey = async {
                 if let Some(rx) = &mut global_toggle_rx {
                     rx.recv().await
                 } else {
                     futures::future::pending().await
                 }
             } => {
+                let Some(()) = hotkey else {
+                    tracing::warn!("hotkeys: channel closed, disabling listener");
+                    global_toggle_rx = None;
+                    continue;
+                };
+                tracing::info!("hotkey: global toggle activated");
                 let mut state = gui_state.write().await;
                 if let Some(pid) = state.pid
                     && !process_alive(pid)
                 {
+                    tracing::debug!("hotkey: stale pid={} cleared", pid);
                     state.pid = None;
                     state.visible = false;
                 }
                 if state.visible {
                     if let Some(pid) = state.pid {
+                        tracing::info!("hotkey: hiding pid={}", pid);
                         terminate_gui(pid);
                     }
                     state.pid = None;
@@ -491,17 +530,20 @@ async fn handle_client(
             if let Some(pid) = state.pid
                 && !process_alive(pid)
             {
+                tracing::debug!("toggle: stale pid={} cleared", pid);
                 state.pid = None;
                 state.visible = false;
             }
 
             if state.visible {
                 if let Some(pid) = state.pid {
+                    tracing::info!("toggle: hiding, terminating pid={}", pid);
                     terminate_gui(pid);
                 }
                 state.pid = None;
                 state.visible = false;
             } else {
+                tracing::info!("toggle: spawning gui");
                 let pid = spawn_gui(Arc::clone(&gui_state))?;
                 state.pid = Some(pid);
                 state.visible = true;
@@ -515,20 +557,30 @@ async fn handle_client(
             if let Some(pid) = state.pid
                 && !process_alive(pid)
             {
+                tracing::debug!("show: stale pid={} cleared", pid);
                 state.pid = None;
                 state.visible = false;
             }
             if !state.visible {
+                tracing::info!("show: spawning gui");
                 let pid = spawn_gui(Arc::clone(&gui_state))?;
                 state.pid = Some(pid);
                 state.visible = true;
+            } else {
+                tracing::debug!(
+                    "show: already visible pid={:?}, no-op",
+                    state.pid
+                );
             }
             Response::Visibility { visible: state.visible }
         }
         Request::Hide => {
             let mut state = gui_state.write().await;
             if let Some(pid) = state.pid {
+                tracing::info!("hide: terminating pid={}", pid);
                 terminate_gui(pid);
+            } else {
+                tracing::debug!("hide: no gui running, no-op");
             }
             state.pid = None;
             state.visible = false;
