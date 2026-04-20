@@ -252,6 +252,12 @@ filter_apps = "<Ctrl>1"
 filter_files = "<Ctrl>2"
 filter_mail = "<Ctrl>3"
 filter_attachments = "<Ctrl>4"
+#
+# global_toggle values follow the XDG shortcuts specification:
+# modifiers are CTRL, ALT, SHIFT, NUM, LOGO (joined with +), followed by an
+# xkbcommon keysym name. Common aliases are accepted and normalized:
+# Super/Meta/Win -> LOGO, Control -> CTRL. If KDE Plasma rejects your
+# shortcut, write it in spec form: "LOGO+space".
 global_toggle = "Super+space"
 
 # ─── Maildir sources ──────────────────────────────────────────────────

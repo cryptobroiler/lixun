@@ -145,10 +145,17 @@ async fn bind_shortcut(
     session_handle: &OwnedObjectPath,
     preferred_trigger: &str,
 ) -> Result<()> {
+    let normalized = normalize_trigger(preferred_trigger);
+    if normalized != preferred_trigger {
+        tracing::info!(
+            "hotkeys: normalized trigger {:?} -> {:?} (XDG shortcuts spec)",
+            preferred_trigger, normalized
+        );
+    }
     let handle_token = random_handle();
     let mut shortcut_opts: HashMap<&str, Value<'_>> = HashMap::new();
     shortcut_opts.insert("description", "Toggle Lupa launcher".into());
-    shortcut_opts.insert("preferred_trigger", preferred_trigger.into());
+    shortcut_opts.insert("preferred_trigger", normalized.as_str().into());
     let shortcuts: Vec<(&str, HashMap<&str, Value<'_>>)> = vec![(SHORTCUT_ID, shortcut_opts)];
 
     let mut options: HashMap<&str, Value<'_>> = HashMap::new();
@@ -312,6 +319,42 @@ fn parse_activated(msg: &zbus::Message) -> Result<(OwnedObjectPath, String)> {
     Ok((session, shortcut_id))
 }
 
+/// Normalize a user-supplied shortcut trigger to the XDG shortcuts
+/// specification (CTRL/ALT/SHIFT/NUM/LOGO). Common aliases like "Super",
+/// "Meta", "Win" are mapped to LOGO; "Control" to CTRL. The key identifier
+/// after the last `+` is preserved verbatim (xkbcommon keysym names are
+/// case-sensitive, e.g. "space" vs "Return").
+///
+/// Ref: https://specifications.freedesktop.org/shortcuts-spec/latest/
+fn normalize_trigger(trigger: &str) -> String {
+    let parts: Vec<&str> = trigger.split('+').map(str::trim).collect();
+    if parts.is_empty() {
+        return trigger.to_string();
+    }
+    let mut out: Vec<String> = Vec::with_capacity(parts.len());
+    for (i, part) in parts.iter().enumerate() {
+        if i == parts.len() - 1 {
+            out.push((*part).to_string());
+        } else {
+            out.push(normalize_modifier(part));
+        }
+    }
+    out.join("+")
+}
+
+fn normalize_modifier(m: &str) -> String {
+    match m.to_ascii_uppercase().as_str() {
+        "CTRL" | "CONTROL" => "CTRL".to_string(),
+        "ALT" | "OPT" | "OPTION" => "ALT".to_string(),
+        "SHIFT" => "SHIFT".to_string(),
+        "NUM" | "NUMLOCK" => "NUM".to_string(),
+        "LOGO" | "SUPER" | "META" | "WIN" | "WINDOWS" | "CMD" | "COMMAND" => {
+            "LOGO".to_string()
+        }
+        other => other.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,5 +374,57 @@ mod tests {
         assert!(!is_valid_token("has space"));
         assert!(!is_valid_token("dash-not-allowed"));
         assert!(!is_valid_token("slash/bad"));
+    }
+
+    #[test]
+    fn normalize_trigger_maps_super_to_logo() {
+        assert_eq!(normalize_trigger("Super+space"), "LOGO+space");
+        assert_eq!(normalize_trigger("super+space"), "LOGO+space");
+        assert_eq!(normalize_trigger("SUPER+space"), "LOGO+space");
+    }
+
+    #[test]
+    fn normalize_trigger_maps_meta_and_win() {
+        assert_eq!(normalize_trigger("Meta+space"), "LOGO+space");
+        assert_eq!(normalize_trigger("Win+space"), "LOGO+space");
+        assert_eq!(normalize_trigger("Windows+space"), "LOGO+space");
+    }
+
+    #[test]
+    fn normalize_trigger_preserves_valid_spec_modifiers() {
+        assert_eq!(normalize_trigger("CTRL+A"), "CTRL+A");
+        assert_eq!(normalize_trigger("CTRL+ALT+Return"), "CTRL+ALT+Return");
+        assert_eq!(normalize_trigger("SHIFT+a"), "SHIFT+a");
+        assert_eq!(normalize_trigger("LOGO+space"), "LOGO+space");
+    }
+
+    #[test]
+    fn normalize_trigger_preserves_key_case() {
+        assert_eq!(normalize_trigger("Control+Return"), "CTRL+Return");
+        assert_eq!(normalize_trigger("Ctrl+a"), "CTRL+a");
+        assert_eq!(normalize_trigger("ctrl+a"), "CTRL+a");
+    }
+
+    #[test]
+    fn normalize_trigger_handles_single_key() {
+        assert_eq!(normalize_trigger("F1"), "F1");
+        assert_eq!(normalize_trigger("Return"), "Return");
+    }
+
+    #[test]
+    fn normalize_trigger_multi_modifier() {
+        assert_eq!(
+            normalize_trigger("Super+Shift+p"),
+            "LOGO+SHIFT+p"
+        );
+        assert_eq!(
+            normalize_trigger("Ctrl+Alt+Super+Delete"),
+            "CTRL+ALT+LOGO+Delete"
+        );
+    }
+
+    #[test]
+    fn normalize_trigger_tolerates_whitespace() {
+        assert_eq!(normalize_trigger("Super + space"), "LOGO+space");
     }
 }
