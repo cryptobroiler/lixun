@@ -218,6 +218,26 @@ fn install_right_click_popover(row: &gtk::Box, category: &Category) {
     row.add_controller(gesture);
 }
 
+fn install_double_click_open(row: &gtk::Box, hit: &Hit) {
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gdk::BUTTON_PRIMARY);
+    let hit = hit.clone();
+    gesture.connect_pressed(move |_g, n_press, _x, _y| {
+        if n_press != 2 {
+            return;
+        }
+        send_record_click(&hit.id.0);
+        if let Err(e) = execute_action(&hit) {
+            tracing::error!("double-click open failed: {}", e);
+            return;
+        }
+        if let Some(app) = gio::Application::default() {
+            app.activate_action("close-launcher", None);
+        }
+    });
+    row.add_controller(gesture);
+}
+
 fn install_drag_source(row: &gtk::Box, hit: &Hit) {
     let Some(path) = hit_file_path(hit) else {
         return;
@@ -341,6 +361,7 @@ pub(crate) fn create_list_factory() -> gtk::SignalListItemFactory {
                     clear_row_controllers(&row);
                     install_action_group(&row, hit);
                     install_right_click_popover(&row, &hit.category);
+                    install_double_click_open(&row, hit);
                     if matches!(hit.category, Category::File | Category::Attachment) {
                         install_drag_source(&row, hit);
                     }

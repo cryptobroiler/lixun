@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::Result;
+use gtk::gio;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, LayerShell};
 use lixun_core::Category;
@@ -44,6 +45,18 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     window.set_margin(Edge::Left, 0);
     window.set_margin(Edge::Right, 0);
     add_css_class(&window, "lixun-window");
+
+    // App-level `close-launcher` action so feature modules (factory's
+    // double-click gesture) can dismiss the launcher without holding
+    // a window reference.
+    let close_action = gio::SimpleAction::new("close-launcher", None);
+    let window_weak = window.downgrade();
+    close_action.connect_activate(move |_, _| {
+        if let Some(w) = window_weak.upgrade() {
+            animate_hide(&w);
+        }
+    });
+    app.add_action(&close_action);
 
     if let Some(display) = gtk::gdk::Display::default()
         && let Some(seat) = display.default_seat()
