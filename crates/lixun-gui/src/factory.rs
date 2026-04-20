@@ -298,15 +298,19 @@ pub(crate) fn create_list_factory() -> gtk::SignalListItemFactory {
             .downcast_ref::<gtk::ListItem>()
             .expect("ListItem expected");
         list_item.set_child(Some(&row));
+
+        // Re-apply hero styling (large icon + card frame) whenever
+        // this item's selected state flips. The "top-hit" visual
+        // follows keyboard/mouse selection, not position.
+        list_item.connect_selected_notify(|list_item| {
+            apply_selected_styling(list_item);
+        });
     });
 
     factory.connect_bind(move |_, list_item| {
         let list_item = list_item
             .downcast_ref::<gtk::ListItem>()
             .expect("ListItem expected");
-
-        let position = list_item.position();
-        let is_top_hit = position == 0;
 
         if let Some(str_obj) = list_item
             .item()
@@ -317,31 +321,11 @@ pub(crate) fn create_list_factory() -> gtk::SignalListItemFactory {
                 if let Some(hit) = hits.iter().find(|h| h.id.0 == doc_id) {
                     let row = list_item.child().and_downcast::<gtk::Box>().unwrap();
 
-                    if is_top_hit {
-                        row.add_css_class("lixun-top-hit");
-                    } else {
-                        row.remove_css_class("lixun-top-hit");
-                    }
-
-                    let icon = row.first_child().and_downcast::<gtk::Image>().unwrap();
-                    let icon_size = if is_top_hit {
-                        ICON_SIZE_TOP_HIT
-                    } else {
-                        ICON_SIZE_NORMAL
-                    };
-                    icon.set_pixel_size(icon_size);
-                    if let Some(paintable) = resolve_icon(hit, icon_size) {
-                        icon.set_paintable(Some(&paintable));
-                    } else {
-                        icon.set_icon_name(Some(match hit.category {
-                            Category::App => "application-x-executable",
-                            Category::File => "text-x-generic",
-                            Category::Mail => "mail-message",
-                            Category::Attachment => "mail-attachment",
-                        }));
-                    }
-
-                    let text_box = icon.next_sibling().and_downcast::<gtk::Box>().unwrap();
+                    let text_box = row
+                        .first_child()
+                        .and_then(|c| c.next_sibling())
+                        .and_downcast::<gtk::Box>()
+                        .unwrap();
                     let title = text_box.first_child().and_downcast::<gtk::Label>().unwrap();
                     title.set_text(&hit.title);
 
@@ -368,9 +352,60 @@ pub(crate) fn create_list_factory() -> gtk::SignalListItemFactory {
                 }
             });
         }
+
+        apply_selected_styling(list_item);
     });
 
     factory
+}
+
+/// Apply the hero "top-hit" visuals to the row iff the list item is
+/// currently selected. The visuals include a larger icon, a card-like
+/// frame, and a bigger title, all driven from the `lixun-top-hit` CSS
+/// class plus an icon-size swap. Called on initial bind and on every
+/// selection change so the hero styling follows the user's cursor
+/// rather than sitting statically on position 0.
+fn apply_selected_styling(list_item: &gtk::ListItem) {
+    let Some(row) = list_item.child().and_downcast::<gtk::Box>() else {
+        return;
+    };
+    let Some(icon) = row.first_child().and_downcast::<gtk::Image>() else {
+        return;
+    };
+    let is_hero = list_item.is_selected();
+    if is_hero {
+        row.add_css_class("lixun-top-hit");
+    } else {
+        row.remove_css_class("lixun-top-hit");
+    }
+    let icon_size = if is_hero {
+        ICON_SIZE_TOP_HIT
+    } else {
+        ICON_SIZE_NORMAL
+    };
+    icon.set_pixel_size(icon_size);
+
+    let Some(str_obj) = list_item
+        .item()
+        .and_then(|i| i.downcast::<gtk::StringObject>().ok())
+    else {
+        return;
+    };
+    let doc_id = str_obj.string().to_string();
+    with_cached_hits(|hits| {
+        if let Some(hit) = hits.iter().find(|h| h.id.0 == doc_id) {
+            if let Some(paintable) = resolve_icon(hit, icon_size) {
+                icon.set_paintable(Some(&paintable));
+            } else {
+                icon.set_icon_name(Some(match hit.category {
+                    Category::App => "application-x-executable",
+                    Category::File => "text-x-generic",
+                    Category::Mail => "mail-message",
+                    Category::Attachment => "mail-attachment",
+                }));
+            }
+        }
+    });
 }
 
 #[cfg(test)]
