@@ -54,34 +54,33 @@
     background-color: rgba(255, 255, 255, 0.04);
 }
 
-/* Apply to both the inner box we decorate AND the ListView's selection. */
-row:selected .lixun-hit,
-.lixun-hit:selected,
-.lixun-hit.lixun-selected {
-    background-color: rgba(75, 141, 255, 0.22);
+/* Selection indicator = hero frame only (see `.lixun-top-hit` below).
+   Neutralise every GTK theme fill on the selected row so the hero
+   frame is the sole visual cue. The theme (Breeze, Adwaita, etc.)
+   aggressively paints `row:selected`; we stomp it at three layers. */
+listview row,
+listview row:selected,
+listview row:selected:focus,
+listview row:selected:hover {
+    background-color: transparent;
+    background-image: none;
 }
 
-/* Keyboard focus ring on the selected list row. Uses a distinct
-   brighter hue from `row:selected` tint so it reads as a ring on top
-   of the selection fill — picking the same blue as the fill made the
-   ring invisible in earlier iterations. */
+/* Keyboard focus ring: neutral white so it stacks cleanly on top of
+   the hero frame without competing for color attention. */
 row:focus-within .lixun-hit,
 .lixun-hit:focus-within {
-    outline: 2px solid rgba(130, 180, 255, 0.95);
+    outline: 2px solid rgba(255, 255, 255, 0.55);
     outline-offset: -2px;
 }
 
-/* Top Hit — larger footprint, subtle card-like elevation when not selected. */
+/* Hero (top-hit) row: card-like elevation. The row factory toggles
+   `.lixun-top-hit` onto the selected item only, so this class is
+   itself the selection indicator. */
 .lixun-top-hit {
     padding: 12px 14px;
-    background-color: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-row:selected .lixun-top-hit,
-.lixun-top-hit:selected {
-    background-color: rgba(75, 141, 255, 0.28);
-    border-color: rgba(75, 141, 255, 0.5);
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 /* ----- Title / subtitle / kind ----- */
