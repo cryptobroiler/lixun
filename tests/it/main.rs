@@ -1,14 +1,14 @@
 use std::process::Command;
 
-use lupa_core::{Action, Category, DocId, Document, Query};
-use lupa_index::{calculator, LupaIndex};
+use lixun_core::{Action, Category, DocId, Document, Query};
+use lixun_index::{calculator, LixunIndex};
 
 #[test]
-fn test_lupa_help() {
+fn test_lixun_help() {
     let output = Command::new("cargo")
-        .args(["run", "-p", "lupa-cli", "--", "--help"])
+        .args(["run", "-p", "lixun-cli", "--", "--help"])
         .output()
-        .expect("failed to run lupa");
+        .expect("failed to run lixun");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("toggle"));
     assert!(stdout.contains("search"));
@@ -37,13 +37,13 @@ fn make_doc(id: &str, title: &str, body: Option<&str>) -> Document {
     }
 }
 
-fn fresh_index() -> (tempfile::TempDir, LupaIndex) {
+fn fresh_index() -> (tempfile::TempDir, LixunIndex) {
     let tmp = tempfile::tempdir().unwrap();
-    let idx = LupaIndex::create_or_open(tmp.path().to_str().unwrap()).unwrap();
+    let idx = LixunIndex::create_or_open(tmp.path().to_str().unwrap()).unwrap();
     (tmp, idx)
 }
 
-fn upsert_docs(idx: &mut LupaIndex, docs: &[Document]) {
+fn upsert_docs(idx: &mut LixunIndex, docs: &[Document]) {
     let mut writer = idx.writer(20_000_000).unwrap();
     for d in docs {
         idx.upsert(d, &mut writer).unwrap();
@@ -51,7 +51,7 @@ fn upsert_docs(idx: &mut LupaIndex, docs: &[Document]) {
     idx.commit(&mut writer).unwrap();
 }
 
-fn search(idx: &LupaIndex, q: &str) -> Vec<String> {
+fn search(idx: &LixunIndex, q: &str) -> Vec<String> {
     let hits = idx
         .search(&Query {
             text: q.to_string(),
@@ -137,7 +137,7 @@ fn calculator_ignores_non_math() {
 #[test]
 fn ipc_codec_roundtrip_v1_hits() {
     use bytes::BytesMut;
-    use lupa_ipc::{FrameCodec, Request, PROTOCOL_VERSION};
+    use lixun_ipc::{FrameCodec, Request, PROTOCOL_VERSION};
     use tokio_util::codec::Encoder;
 
     let mut codec = FrameCodec::default();

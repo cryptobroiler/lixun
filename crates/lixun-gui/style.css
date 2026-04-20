@@ -1,0 +1,168 @@
+/* Lixun — Spotlight-like launcher for Linux. Dark translucent theme. */
+
+/* ----- Design tokens (GTK supports @define-color; CSS custom properties
+   are only partially honored by GtkCssProvider, so we use hardcoded values
+   below but group them visually for maintainability). ----- */
+
+/* ----- Main window ----- */
+.lixun-window {
+    background: rgba(28, 28, 32, 0.92);
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7),
+                0 8px 16px rgba(0, 0, 0, 0.5);
+}
+
+/* ----- Search entry ----- */
+.lixun-entry {
+    font-size: 24px;
+    font-weight: 300;
+    padding: 12px 16px;
+    background-color: transparent;
+    color: #f0f0f4;
+    caret-color: #4b8dff;
+    border: none;
+    border-radius: 10px;
+}
+
+.lixun-entry:focus,
+.lixun-entry:focus-within {
+    outline: none;
+    box-shadow: inset 0 -1px 0 rgba(75, 141, 255, 0.6);
+}
+
+.lixun-entry placeholder {
+    color: #7b7b86;
+}
+
+/* ----- Results container ----- */
+.lixun-results {
+    background-color: transparent;
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+    padding-top: 4px;
+    min-height: 320px;
+}
+
+/* ----- Hit row ----- */
+.lixun-hit {
+    padding: 8px 12px;
+    border-radius: 10px;
+    transition: background-color 0.12s ease;
+}
+
+.lixun-hit:hover {
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+/* Apply to both the inner box we decorate AND the ListView's selection. */
+row:selected .lixun-hit,
+.lixun-hit:selected,
+.lixun-hit.lixun-selected {
+    background-color: rgba(75, 141, 255, 0.22);
+}
+
+row:focus-within .lixun-hit,
+.lixun-hit:focus-within {
+    outline: 2px solid rgba(75, 141, 255, 0.7);
+    outline-offset: -2px;
+}
+
+/* Top Hit — larger footprint, subtle card-like elevation when not selected. */
+.lixun-top-hit {
+    padding: 12px 14px;
+    background-color: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+row:selected .lixun-top-hit,
+.lixun-top-hit:selected {
+    background-color: rgba(75, 141, 255, 0.28);
+    border-color: rgba(75, 141, 255, 0.5);
+}
+
+/* ----- Title / subtitle / kind ----- */
+.lixun-title {
+    font-weight: 500;
+    color: #f0f0f4;
+    font-size: 14px;
+}
+
+.lixun-top-hit .lixun-title {
+    font-size: 16px;
+}
+
+.lixun-subtitle {
+    color: #a8a8b2;
+    font-size: 11px;
+}
+
+.lixun-kind {
+    color: #7b7b86;
+    font-size: 10px;
+    font-weight: 500;
+    margin-right: 4px;
+}
+
+/* ----- Status bar ----- */
+.lixun-status {
+    padding: 6px 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 0 0 10px 10px;
+    margin-top: 4px;
+}
+
+.lixun-status-label {
+    color: #a8a8b2;
+    font-size: 12px;
+}
+
+.lixun-status-calc {
+    color: #f0f0f4;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+}
+
+.lixun-status-action {
+    background-color: rgba(75, 141, 255, 0.22);
+    color: #f0f0f4;
+    border: 1px solid rgba(75, 141, 255, 0.35);
+    border-radius: 6px;
+    padding: 2px 10px;
+    font-size: 11px;
+}
+
+.lixun-status-action:hover {
+    background-color: rgba(75, 141, 255, 0.35);
+}
+
+/* ----- Show / hide transitions ----- */
+@keyframes lixun-fade-slide-in {
+    from {
+        opacity: 0;
+        transform: translateY(-8px) scale(0.98);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@keyframes lixun-fade-slide-out {
+    from {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+    to {
+        opacity: 0;
+        transform: translateY(-8px) scale(0.98);
+    }
+}
+
+.lixun-showing {
+    animation: lixun-fade-slide-in 150ms ease-out;
+}
+
+.lixun-hiding {
+    animation: lixun-fade-slide-out 120ms ease-in;
+}

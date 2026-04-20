@@ -1,22 +1,22 @@
 [workspace]
 members = [
-    "crates/lupa-core",
-    "crates/lupa-ipc",
-    "crates/lupa-index",
-    "crates/lupa-extract",
-    "crates/lupa-sources",
-    "crates/lupa-source-maildir",
-    "crates/lupa-source-thunderbird",
-    "crates/lupa-plugin-bundle",
-    "crates/lupa-indexer",
-    "crates/lupa-daemon",
-    "crates/lupa-gui",
-    "crates/lupa-cli",
+    "crates/lixun-core",
+    "crates/lixun-ipc",
+    "crates/lixun-index",
+    "crates/lixun-extract",
+    "crates/lixun-sources",
+    "crates/lixun-source-maildir",
+    "crates/lixun-source-thunderbird",
+    "crates/lixun-plugin-bundle",
+    "crates/lixun-indexer",
+    "crates/lixun-daemon",
+    "crates/lixun-gui",
+    "crates/lixun-cli",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Spotlight-like launcher for Linux"
 

@@ -7,11 +7,11 @@ This document lists the Success Criteria from `.local/plans/spotlight-parity.md`
 | SC | Criterion | Covered by |
 |----|-----------|------------|
 | SC-2 | "résumé" matches "resume" | `tests/it: spotlight_diacritic_insensitive` |
-| SC-3 | "chrm" matches "Chrome" (fuzzy) | `tests/it: spotlight_fuzzy_single_edit_typo` (firefox/firfox) + `lupa-index: test_search_fuzzy_typo` |
-| SC-4 | "my report" AND-semantics | `tests/it: spotlight_and_semantics_default` + `lupa-index: test_search_and_default` |
-| SC-5 | "-draft" excludes | `tests/it: spotlight_not_operator_excludes` + `lupa-index: test_search_not_operator` |
-| SC-6 | "2+2" → "4" | `tests/it: calculator_detects_arithmetic` + 25 tests in `lupa-index::calculator` |
-| SC-7 | "sqrt(16)+pi" | `lupa-index::calculator::tests::detect_evaluates_function_and_constant` |
+| SC-3 | "chrm" matches "Chrome" (fuzzy) | `tests/it: spotlight_fuzzy_single_edit_typo` (firefox/firfox) + `lixun-index: test_search_fuzzy_typo` |
+| SC-4 | "my report" AND-semantics | `tests/it: spotlight_and_semantics_default` + `lixun-index: test_search_and_default` |
+| SC-5 | "-draft" excludes | `tests/it: spotlight_not_operator_excludes` + `lixun-index: test_search_not_operator` |
+| SC-6 | "2+2" → "4" | `tests/it: calculator_detects_arithmetic` + 25 tests in `lixun-index::calculator` |
+| SC-7 | "sqrt(16)+pi" | `lixun-index::calculator::tests::detect_evaluates_function_and_constant` |
 | SC-20 | Typing feels instant | event-driven debounce (80 ms single cancelable timeout) replaces 40 ms polling |
 | SC-21 | 110 + 25 new tests green | `cargo test --workspace` |
 | SC-22 | clippy -D warnings clean | `cargo clippy --workspace -- -D warnings` |
@@ -21,13 +21,13 @@ This document lists the Success Criteria from `.local/plans/spotlight-parity.md`
 Run:
 ```
 cargo build --workspace --release
-./target/release/lupad &
-./target/release/lupa toggle
+./target/release/lixund &
+./target/release/lixun toggle
 ```
 
 Walk through:
 
-- [ ] **SC-1** (hotkey) — configure compositor to bind Super+Space → `lupa toggle`; press → window appears
+- [ ] **SC-1** (hotkey) — configure compositor to bind Super+Space → `lixun toggle`; press → window appears
 - [ ] **SC-8** (drag-out) — select a File row, drag onto Desktop/Files; file copies
 - [ ] **SC-9** (right-click menu) — right-click File row; popover shows Open/Reveal/Copy path/Quick Look/Get Info
 - [ ] **SC-10** (Space Quick Look) — select File row, press Space; gnome-sushi or xdg-open launches
@@ -43,8 +43,8 @@ Walk through:
 
 ## Backwards compatibility
 
-- [ ] **Protocol v1 client** — old `lupa-cli` binary against new `lupad`: `Request::Search` → `Response::Hits`, not `HitsWithExtras` (daemon negotiates per-frame)
-- [ ] **Index rebuild on version mismatch** — delete `~/.local/state/lupa/index/index_version.txt`, restart daemon; logs show "rebuilding index"
+- [ ] **Protocol v1 client** — old `lixun-cli` binary against new `lixund`: `Request::Search` → `Response::Hits`, not `HitsWithExtras` (daemon negotiates per-frame)
+- [ ] **Index rebuild on version mismatch** — delete `~/.local/state/lixun/index/index_version.txt`, restart daemon; logs show "rebuilding index"
 
 ## Evidence collected on approval
 

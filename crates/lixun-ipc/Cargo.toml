@@ -1,0 +1,13 @@
+[package]
+name = "lixun-ipc"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lixun-core = { path = "../lixun-core" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["codec"] }
+bytes.workspace = true
+chrono.workspace = true

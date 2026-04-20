@@ -1,0 +1,247 @@
+//! Keyboard bindings for the launcher window.
+//!
+//! Centralizes all key handling so window.rs stays small. Extended in later
+//! waves for category filters (Ctrl+1..4), category jumps (Ctrl+Down/Up),
+//! Quick Look (Space), and history navigation (↑ in empty entry).
+
+use glib::clone;
+use gtk::prelude::*;
+use lixun_daemon::config::Keybindings;
+use lixun_core::Action;
+
+use crate::actions::{copy_to_clipboard, execute_action, execute_secondary_action, quick_look};
+use crate::factory::{synthetic_history_hits, update_results, with_cached_hits};
+use crate::ipc::{request_search_history, send_record_click, IpcClient};
+use crate::status::StatusBar;
+use crate::window::CategoryChips;
+
+fn close_launcher(window: &gtk::ApplicationWindow) {
+    window.close();
+    if let Some(app) = window.application() {
+        app.quit();
+    }
+}
+
+fn selected_hit_in<F: FnOnce(&lixun_core::Hit)>(
+    selection: &gtk::SingleSelection,
+    filter_model: &gtk::FilterListModel,
+    f: F,
+) {
+    let idx = selection.selected();
+    if let Some(item) = filter_model.item(idx)
+        && let Some(str_obj) = item.downcast_ref::<gtk::StringObject>()
+    {
+        let doc_id = str_obj.string().to_string();
+        with_cached_hits(|hits| {
+            if let Some(hit) = hits.iter().find(|h| h.id.0 == doc_id) {
+                f(hit);
+            }
+        });
+    }
+}
+
+fn jump_to_next_category(
+    selection: &gtk::SingleSelection,
+    filter_model: &gtk::FilterListModel,
+    direction: i32,
+) {
+    let n = filter_model.n_items();
+    if n == 0 {
+        return;
+    }
+    let current_idx = selection.selected();
+
+    let current_cat = filter_model
+        .item(current_idx)
+        .and_then(|o| o.downcast::<gtk::StringObject>().ok())
+        .and_then(|s| {
+            let id = s.string().to_string();
+            with_cached_hits(|hits| hits.iter().find(|h| h.id.0 == id).map(|h| h.category))
+        });
+
+    let range: Box<dyn Iterator<Item = u32>> = if direction > 0 {
+        Box::new((current_idx + 1)..n)
+    } else {
+        Box::new((0..current_idx).rev())
+    };
+
+    for i in range {
+        let cat = filter_model
+            .item(i)
+            .and_then(|o| o.downcast::<gtk::StringObject>().ok())
+            .and_then(|s| {
+                let id = s.string().to_string();
+                with_cached_hits(|hits| {
+                    hits.iter().find(|h| h.id.0 == id).map(|h| h.category)
+                })
+            });
+        if cat != current_cat {
+            selection.set_selected(i);
+            return;
+        }
+    }
+}
+
+fn accel_matches(accel: &str, key: gtk::gdk::Key, state: gtk::gdk::ModifierType) -> bool {
+    let Some((expected_key, expected_mods)) = gtk::accelerator_parse(accel) else {
+        return false;
+    };
+    key == expected_key && state.contains(expected_mods)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn install_keyboard_handler(
+    window: &gtk::ApplicationWindow,
+    list_view: &gtk::ListView,
+    entry: &gtk::Entry,
+    selection: &gtk::SingleSelection,
+    filter_model: &gtk::FilterListModel,
+    model: &gtk::StringList,
+    chips: std::rc::Rc<CategoryChips>,
+    status_bar: std::rc::Rc<StatusBar>,
+    _ipc: IpcClient,
+    keybindings: Keybindings,
+) {
+    // Main key controller attached to window with Capture phase
+    // This ensures all key handling works regardless of focus state
+    let key_controller = gtk::EventControllerKey::new();
+    key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    key_controller.connect_key_pressed(clone!(
+        #[strong] selection,
+        #[strong] filter_model,
+        #[strong] list_view,
+        #[strong] window,
+        #[strong] entry,
+        #[strong] chips,
+        #[strong] keybindings,
+        move |_, key, _keycode, state| {
+            let ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            let shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+            if accel_matches(&keybindings.previous_result, key, state) {
+                    // Up on empty entry = let entry_key_controller handle history
+                    if entry.text().is_empty() && entry.is_focus() {
+                        return glib::signal::Propagation::Proceed;
+                    }
+                    if ctrl {
+                        jump_to_next_category(&selection, &filter_model, -1);
+                        let target = selection.selected();
+                        if target != gtk::INVALID_LIST_POSITION {
+                            list_view.scroll_to(target, gtk::ListScrollFlags::NONE, None);
+                        }
+                        return glib::signal::Propagation::Stop;
+                    }
+                    let current = selection.selected();
+                    if current > 0 {
+                        let target = current - 1;
+                        selection.set_selected(target);
+                        list_view.scroll_to(target, gtk::ListScrollFlags::NONE, None);
+                    }
+                    glib::signal::Propagation::Stop
+            } else if accel_matches(&keybindings.next_result, key, state) {
+                    if ctrl {
+                        jump_to_next_category(&selection, &filter_model, 1);
+                        let target = selection.selected();
+                        if target != gtk::INVALID_LIST_POSITION {
+                            list_view.scroll_to(target, gtk::ListScrollFlags::NONE, None);
+                        }
+                        return glib::signal::Propagation::Stop;
+                    }
+                    let current = selection.selected();
+                    let n = selection.n_items();
+                    if current + 1 < n {
+                        let target = current + 1;
+                        selection.set_selected(target);
+                        list_view.scroll_to(target, gtk::ListScrollFlags::NONE, None);
+                    }
+                    glib::signal::Propagation::Stop
+            } else if accel_matches(&keybindings.close, key, state) {
+                    close_launcher(&window);
+                    glib::signal::Propagation::Stop
+            } else if accel_matches(&keybindings.primary_action, key, state)
+                || accel_matches(&keybindings.secondary_action, key, state)
+            {
+                    let mut should_hide = true;
+                    selected_hit_in(&selection, &filter_model, |hit| {
+                        if let Action::ReplaceQuery { q } = &hit.action {
+                            entry.set_text(q);
+                            entry.set_position(-1);
+                            entry.grab_focus();
+                            should_hide = false;
+                            return;
+                        }
+                        send_record_click(&hit.id.0);
+                        let result = if accel_matches(&keybindings.secondary_action, key, state) || shift || ctrl {
+                            execute_secondary_action(hit)
+                        } else {
+                            execute_action(hit)
+                        };
+                        if let Err(e) = result {
+                            tracing::error!("Action failed: {}", e);
+                        }
+                    });
+                    if should_hide {
+                        close_launcher(&window);
+                    }
+                    glib::signal::Propagation::Stop
+            } else if accel_matches(&keybindings.copy, key, state) {
+                    selected_hit_in(&selection, &filter_model, copy_to_clipboard);
+                    glib::signal::Propagation::Stop
+            } else if accel_matches(&keybindings.quick_look, key, state) && !entry.is_focus() {
+                    // Only trigger quick_look when focus is NOT in entry (i.e. list is focused)
+                    // This allows space to be typed in the entry
+                    selected_hit_in(&selection, &filter_model, |hit| {
+                        if let Err(e) = quick_look(hit) {
+                            tracing::error!("Quick Look failed: {}", e);
+                        }
+                    });
+                    glib::signal::Propagation::Stop
+            } else if accel_matches(&keybindings.filter_all, key, state) {
+                    chips.activate_index(0);
+                    glib::signal::Propagation::Stop
+            } else if accel_matches(&keybindings.filter_apps, key, state) {
+                    chips.activate_index(1);
+                    glib::signal::Propagation::Stop
+            } else if accel_matches(&keybindings.filter_files, key, state) {
+                    chips.activate_index(2);
+                    glib::signal::Propagation::Stop
+            } else if accel_matches(&keybindings.filter_mail, key, state) {
+                    chips.activate_index(3);
+                    glib::signal::Propagation::Stop
+            } else if accel_matches(&keybindings.filter_attachments, key, state) {
+                    chips.activate_index(4);
+                    glib::signal::Propagation::Stop
+            } else {
+                glib::signal::Propagation::Proceed
+            }
+        }
+    ));
+    window.add_controller(key_controller);
+
+    // Entry-level key controller for history navigation when entry is focused and empty
+    let entry_key_controller = gtk::EventControllerKey::new();
+    entry_key_controller.connect_key_pressed(clone!(
+        #[strong] entry,
+        #[strong] selection,
+        #[strong] model,
+        #[strong] list_view,
+        #[strong] status_bar,
+        #[strong] keybindings,
+        move |_, key, _keycode, state| {
+            if accel_matches(&keybindings.history_up, key, state) && entry.text().is_empty() {
+                    let queries = request_search_history(10);
+                    if queries.is_empty() {
+                        return glib::signal::Propagation::Stop;
+                    }
+                    let hits = synthetic_history_hits(&queries);
+                    update_results(&model, &hits);
+                    selection.set_selected(0);
+                    list_view.scroll_to(0, gtk::ListScrollFlags::NONE, None);
+                    status_bar.hide();
+                    glib::signal::Propagation::Stop
+            } else {
+                glib::signal::Propagation::Proceed
+            }
+        }
+    ));
+    entry.add_controller(entry_key_controller);
+}

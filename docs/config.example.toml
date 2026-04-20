@@ -1,6 +1,6 @@
-# Example configuration for lupa.
+# Example configuration for lixun.
 #
-# Copy to ~/.config/lupa/config.toml and adjust to taste.
+# Copy to ~/.config/lixun/config.toml and adjust to taste.
 # Every section below is optional; missing fields fall back to defaults.
 
 # Maximum file size to extract text from, in MiB.
@@ -297,7 +297,7 @@ global_toggle = "Super+space"
 #
 # When the section is present and a Thunderbird profile can be located
 # (either via the `profile` field below or by auto-detecting
-# ~/.thunderbird/), Lupa registers two source instances:
+# ~/.thunderbird/), Lixun registers two source instances:
 # builtin:gloda (SQLite messages: subject, sender, recipients, body
 # snippet) and builtin:tb_attachments (mbox-level attachment text).
 #
@@ -305,7 +305,7 @@ global_toggle = "Super+space"
 # enabled = true
 #
 # # Override auto-detection (useful if you have multiple profiles and
-# # the default one isn't what you want Lupa to index). Must be the
+# # the default one isn't what you want Lixun to index). Must be the
 # # full profile dir containing global-messages-db.sqlite and Mail/.
 # # If the path does not exist, the plugin logs a warn and registers
 # # no sources — the rest of the daemon continues to run.

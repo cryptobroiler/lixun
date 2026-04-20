@@ -1,0 +1,28 @@
+[package]
+name = "lixun-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "lixun"
+path = "src/main.rs"
+
+[dependencies]
+lixun-core = { path = "../lixun-core" }
+lixun-ipc = { path = "../lixun-ipc" }
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bytes.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+lixun-index = { path = "../lixun-index" }
+lixun-sources = { path = "../lixun-sources" }
+tempfile = "3"
+
+[[test]]
+name = "it"
+path = "../../tests/it/main.rs"

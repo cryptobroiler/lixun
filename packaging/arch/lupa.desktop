@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Lupa
-Comment=Spotlight-like launcher for Linux
-Exec=/usr/bin/lupad
-Hidden=true
-NoDisplay=true
-X-GNOME-Autostart-enabled=true
