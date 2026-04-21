@@ -490,7 +490,16 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     // Scrolled size policy lives in CSS (.lixun-results min-height)
     // to keep all layout tuning in one place. Avoid hardcoding
     // content height here — CSS wins anyway via GTK's cascade.
-    let scrolled = gtk::ScrolledWindow::builder().vexpand(true).build();
+    //
+    // vexpand(false) on the INITIAL builder is load-bearing: the
+    // widget is hidden on fresh spawn and on empty-query state
+    // (set_visible(false) below), but a vexpand(true) child still
+    // influences the layer-shell surface's size request on the
+    // first layout pass, briefly claiming vertical space and
+    // defeating the empty-query collapse. Visibility branches
+    // below flip vexpand to true when results are actually shown.
+    // See commit 04fb2ad for the original fix.
+    let scrolled = gtk::ScrolledWindow::builder().vexpand(false).build();
     scrolled.set_widget_name("lixun-results-scroll");
     add_css_class(&scrolled, "lixun-results");
     scrolled.set_visible(false);
