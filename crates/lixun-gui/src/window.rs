@@ -205,12 +205,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     vbox.set_margin_start(16);
     vbox.set_margin_end(16);
     vbox.set_margin_top(12);
-    // Tighter bottom margin than top. The ScrolledWindow holding
-    // results is the last child; a large bottom margin wastes
-    // vertical space that could be showing another row of results
-    // and also causes the last on-screen row to sit unusually
-    // close to the window edge when padding + margin stack.
-    vbox.set_margin_bottom(4);
+    vbox.set_margin_bottom(12);
 
     let entry = gtk::Entry::builder()
         .placeholder_text("Search\u{2026}")
@@ -225,11 +220,10 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     chips.container.set_visible(false);
     vbox.append(&chips.container);
 
-    let scrolled = gtk::ScrolledWindow::builder()
-        .vexpand(false)
-        .min_content_height(320)
-        .max_content_height(520)
-        .build();
+    // Scrolled size policy lives in CSS (.lixun-results min-height)
+    // to keep all layout tuning in one place. Avoid hardcoding
+    // content height here — CSS wins anyway via GTK's cascade.
+    let scrolled = gtk::ScrolledWindow::builder().vexpand(true).build();
     scrolled.set_widget_name("lixun-results-scroll");
     add_css_class(&scrolled, "lixun-results");
     scrolled.set_visible(false);
