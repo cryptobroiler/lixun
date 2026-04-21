@@ -156,25 +156,26 @@ pub(crate) fn install_keyboard_handler(
                     if entry.text().is_empty() && entry_has_focus(&entry, &window) {
                         return glib::signal::Propagation::Proceed;
                     }
-                    // BUG-5 regression guard: no results at all → pin
-                    // focus in entry and swallow the key. GTK default
-                    // focus-chain otherwise warps focus to a hidden
-                    // sibling widget, stranding the caret.
+                    // Defensive: no results, no list to navigate. Pin focus
+                    // in the entry so GTK's default Up/Down focus-chain
+                    // cannot warp focus to a sibling widget (the list is
+                    // hidden, chip row, etc.) leaving the user stuck in
+                    // a widget that doesn't accept printable keys.
+                    // BUG-5 regression guard.
                     if filter_model.n_items() == 0 {
                         entry.grab_focus();
                         return glib::signal::Propagation::Stop;
                     }
+                    let entry_had_focus = entry_has_focus(&entry, &window);
                     if ctrl {
                         jump_to_next_category(&selection, &filter_model, -1);
                         let target = selection.selected();
                         if target != gtk::INVALID_LIST_POSITION {
                             list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
                         }
-                        // Decouple selection-highlight from keyboard focus
-                        // (BUG-5): keep the caret in the entry so
-                        // printable keys continue typing while arrows
-                        // only move the list selection.
-                        entry.grab_focus();
+                        if entry_had_focus {
+                            list_view.grab_focus();
+                        }
                         return glib::signal::Propagation::Stop;
                     }
                     let current = selection.selected();
@@ -182,24 +183,30 @@ pub(crate) fn install_keyboard_handler(
                         let target = current - 1;
                         selection.set_selected(target);
                         list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
+                        if entry_had_focus {
+                            list_view.grab_focus();
+                        }
+                    } else {
+                        // Already at the top row; Up returns focus to the Entry.
+                        entry.grab_focus();
                     }
-                    // Always keep the caret in the entry regardless of
-                    // which row is selected (BUG-5 contract).
-                    entry.grab_focus();
                     glib::signal::Propagation::Stop
             } else if accel_matches(&keybindings.next_result, key, state) {
-                    // BUG-5 regression guard: same empty-results pin.
+                    // BUG-5 regression guard: same defensive pin as Up.
                     if filter_model.n_items() == 0 {
                         entry.grab_focus();
                         return glib::signal::Propagation::Stop;
                     }
+                    let entry_had_focus = entry_has_focus(&entry, &window);
                     if ctrl {
                         jump_to_next_category(&selection, &filter_model, 1);
                         let target = selection.selected();
                         if target != gtk::INVALID_LIST_POSITION {
                             list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
                         }
-                        entry.grab_focus();
+                        if entry_had_focus {
+                            list_view.grab_focus();
+                        }
                         return glib::signal::Propagation::Stop;
                     }
                     let current = selection.selected();
@@ -209,8 +216,9 @@ pub(crate) fn install_keyboard_handler(
                         selection.set_selected(target);
                         list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
                     }
-                    // BUG-5: always keep caret in entry for typing.
-                    entry.grab_focus();
+                    if entry_had_focus && n > 0 {
+                        list_view.grab_focus();
+                    }
                     glib::signal::Propagation::Stop
             } else if accel_matches(&keybindings.close, key, state) {
                     controller.hide();
