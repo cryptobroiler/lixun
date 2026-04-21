@@ -260,6 +260,51 @@ filter_attachments = "<Ctrl>4"
 # shortcut, write it in spec form: "LOGO+space".
 global_toggle = "Super+space"
 
+# ─── Preview (Quick-Look style panel) ─────────────────────────────────
+#
+# Configures the preview subsystem. This section is parsed today by the
+# daemon but is not yet wired to runtime behaviour; it is the stable
+# schema preview plugins (code, image, pdf, office, email, A/V, text)
+# will consume once they land (G2.8+ in the roadmap). You can set
+# these values now; they will take effect as each plugin ships.
+#
+# All fields are optional. Section itself may be omitted; defaults apply.
+[preview]
+# Master switch. Reserved for G2.8+; consumed by the preview dispatcher
+# once that lands. Setting it to false today has no runtime effect.
+enabled = true
+
+# Plugin id to force (e.g. "text", "image", "pdf") for every preview
+# invocation, or "auto" to let the preview process choose based on
+# MIME / extension. Stored verbatim by the daemon; unknown ids are
+# rejected by the preview process at open time, not at config-load.
+default_format = "auto"
+
+# Upper bound on file size (MiB) the preview layer will render. Files
+# larger than this show a "too large to preview" placeholder instead.
+# This is INDEPENDENT from the top-level max_file_size_mb (which gates
+# text extraction for indexing) and is intentionally larger, because
+# rendering an image/PDF/video is routinely acceptable at sizes where
+# full-text extraction would be wasteful.
+max_file_size_mb = 200
+
+# Directory for rendered thumbnails and cached preview artefacts.
+# Default is XDG cache: ~/.cache/lixun/preview. Tilde is expanded.
+# The directory is created on first use by the preview process, not
+# at daemon startup.
+# cache_dir = "~/.cache/lixun/preview"
+
+# Per-plugin configuration lives under [preview.<plugin>] subtables.
+# The daemon preserves these verbatim and passes them to each preview
+# plugin, which knows its own schema. Examples (not yet wired; see
+# .local/plans/gui-ux-v1-tier2-plugins.md for the full list):
+#
+# [preview.code]
+# theme = "Solarized (light)"   # syntect theme name
+#
+# [preview.image]
+# background = "#222222"        # matte behind transparent images
+
 # ─── Maildir sources ──────────────────────────────────────────────────
 #
 # Presence of this section = plugin loaded. Omit to skip.

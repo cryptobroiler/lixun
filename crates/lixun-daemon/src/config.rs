@@ -13,6 +13,7 @@ const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
     "extractor_timeout_secs",
     "ranking",
     "keybindings",
+    "preview",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -24,6 +25,7 @@ struct ConfigToml {
     extractor_timeout_secs: Option<u64>,
     ranking: Option<RankingToml>,
     keybindings: Option<KeybindingsToml>,
+    preview: Option<PreviewToml>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,6 +34,60 @@ struct RankingToml {
     files: Option<f32>,
     mail: Option<f32>,
     attachments: Option<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewToml {
+    enabled: Option<bool>,
+    default_format: Option<String>,
+    max_file_size_mb: Option<u64>,
+    cache_dir: Option<String>,
+}
+
+const KNOWN_PREVIEW_KEYS: &[&str] = &["enabled", "default_format", "max_file_size_mb", "cache_dir"];
+
+#[derive(Debug, Clone)]
+pub struct PreviewConfig {
+    /// Master switch for the preview subsystem. Consumed by G2.8+;
+    /// no code path reads it yet.
+    pub enabled: bool,
+    /// Plugin id to force, or `"auto"` to dispatch by MIME / extension.
+    /// Unknown ids are validated by the preview process at open time,
+    /// not by the daemon — daemon stores the string verbatim.
+    pub default_format: String,
+    /// Upper bound on file size (MiB) the preview layer will attempt
+    /// to render. Files larger than this get a "too large" placeholder.
+    /// Intentionally independent from and larger than the top-level
+    /// `max_file_size_mb` (which gates text extraction, not rendering).
+    pub max_file_size_mb: u64,
+    /// Directory for rendered thumbnails and cached preview artefacts.
+    /// Tilde is expanded at parse time. Not created by the config
+    /// loader; preview writers are responsible for `create_dir_all`.
+    pub cache_dir: PathBuf,
+    /// Raw per-plugin config tables under `[preview.<plugin>]`, e.g.
+    /// `[preview.code] theme = "..."`. Preserved verbatim so preview
+    /// plugins can parse their own shape without the daemon knowing
+    /// any specific format. Mirrors the top-level `plugin_sections`
+    /// pattern used for source plugins.
+    pub plugin_sections: BTreeMap<String, toml::Value>,
+}
+
+impl Default for PreviewConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            default_format: "auto".into(),
+            max_file_size_mb: 200,
+            cache_dir: default_preview_cache_dir(),
+            plugin_sections: BTreeMap::new(),
+        }
+    }
+}
+
+fn default_preview_cache_dir() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".cache"))
+        .join("lixun/preview")
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,6 +141,7 @@ pub struct Config {
     pub ranking_mail: f32,
     pub ranking_attachments: f32,
     pub keybindings: Keybindings,
+    pub preview: PreviewConfig,
     pub state_dir: PathBuf,
     pub plugin_sections: BTreeMap<String, toml::Value>,
 }
@@ -103,6 +160,7 @@ impl Default for Config {
             ranking_mail: 1.0,
             ranking_attachments: 0.9,
             keybindings: Keybindings::default(),
+            preview: PreviewConfig::default(),
             state_dir: state_dir(),
             plugin_sections: BTreeMap::new(),
         }
@@ -250,10 +308,33 @@ impl Config {
                 cfg.keybindings.global_toggle = v;
             }
         }
+        if let Some(preview) = parsed.preview {
+            if let Some(v) = preview.enabled {
+                cfg.preview.enabled = v;
+            }
+            if let Some(v) = preview.default_format {
+                cfg.preview.default_format = v;
+            }
+            if let Some(v) = preview.max_file_size_mb {
+                cfg.preview.max_file_size_mb = v;
+            }
+            if let Some(v) = preview.cache_dir {
+                cfg.preview.cache_dir = expand_tilde(&v);
+            }
+        }
 
         let known: HashSet<&'static str> = KNOWN_TOP_LEVEL_KEYS.iter().copied().collect();
+        let known_preview: HashSet<&'static str> = KNOWN_PREVIEW_KEYS.iter().copied().collect();
         let raw: toml::Value = toml::from_str(content)?;
-        if let toml::Value::Table(top) = raw {
+        if let toml::Value::Table(mut top) = raw {
+            if let Some(toml::Value::Table(preview_table)) = top.remove("preview") {
+                for (key, value) in preview_table {
+                    if known_preview.contains(key.as_str()) {
+                        continue;
+                    }
+                    cfg.preview.plugin_sections.insert(key, value);
+                }
+            }
             for (key, value) in top {
                 if known.contains(key.as_str()) {
                     continue;

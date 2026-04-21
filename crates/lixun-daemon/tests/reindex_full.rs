@@ -1,4 +1,4 @@
-use lixun_daemon::config::{Config, Keybindings};
+use lixun_daemon::config::{Config, Keybindings, PreviewConfig};
 use std::collections::BTreeMap;
 use lixun_daemon::index_service::spawn_writer_service;
 use lixun_daemon::indexer;
@@ -16,6 +16,7 @@ fn test_config(root: std::path::PathBuf, state_dir: std::path::PathBuf) -> Confi
         ranking_mail: 1.0,
         ranking_attachments: 1.0,
         keybindings: Keybindings::default(),
+        preview: PreviewConfig::default(),
         state_dir,
         plugin_sections: BTreeMap::new(),
     }
