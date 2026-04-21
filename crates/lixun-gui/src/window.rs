@@ -205,7 +205,12 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     vbox.set_margin_start(16);
     vbox.set_margin_end(16);
     vbox.set_margin_top(12);
-    vbox.set_margin_bottom(12);
+    // Tighter bottom margin than top. The ScrolledWindow holding
+    // results is the last child; a large bottom margin wastes
+    // vertical space that could be showing another row of results
+    // and also causes the last on-screen row to sit unusually
+    // close to the window edge when padding + margin stack.
+    vbox.set_margin_bottom(4);
 
     let entry = gtk::Entry::builder()
         .placeholder_text("Search\u{2026}")

@@ -312,11 +312,32 @@ pub(crate) fn create_list_factory() -> gtk::SignalListItemFactory {
         list_item.set_child(Some(&row));
 
         // Re-apply hero styling (large icon + card frame) whenever
-        // this item's selected state flips. The "top-hit" visual
-        // follows keyboard/mouse selection, not position.
+        // this item's selected state flips. GTK4 ListView recycles
+        // child widgets across list_items as the user scrolls; the
+        // notify handler is attached to the concrete ListItem, so it
+        // fires correctly for whichever item currently owns this
+        // row widget. Combined with the connect_unbind reset below,
+        // this prevents stale `.lixun-top-hit` classes from carrying
+        // over to rows that are no longer selected.
         list_item.connect_selected_notify(|list_item| {
             apply_selected_styling(list_item);
         });
+    });
+
+    // Reset hero styling when a row widget is returned to the pool
+    // for recycling. Without this a row that was selected at unbind
+    // time would retain its .lixun-top-hit class on reuse for an
+    // unselected item, producing a ghost hero highlight.
+    factory.connect_unbind(|_, list_item| {
+        let list_item = list_item
+            .downcast_ref::<gtk::ListItem>()
+            .expect("ListItem expected");
+        if let Some(row) = list_item.child().and_downcast::<gtk::Box>() {
+            row.remove_css_class("lixun-top-hit");
+            if let Some(icon) = row.first_child().and_downcast::<gtk::Image>() {
+                icon.set_pixel_size(ICON_SIZE_NORMAL);
+            }
+        }
     });
 
     factory.connect_bind(move |_, list_item| {
