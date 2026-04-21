@@ -125,6 +125,8 @@ pub(crate) fn install_keyboard_handler(
     model: &gtk::StringList,
     chips: std::rc::Rc<CategoryChips>,
     status_bar: std::rc::Rc<StatusBar>,
+    scrolled: &gtk::ScrolledWindow,
+    chips_container: &gtk::Box,
     _ipc: IpcClient,
     keybindings: Keybindings,
     controller: std::rc::Rc<LauncherController>,
@@ -318,6 +320,8 @@ pub(crate) fn install_keyboard_handler(
         #[strong] list_view,
         #[strong] status_bar,
         #[strong] keybindings,
+        #[strong] scrolled,
+        #[strong] chips_container,
         move |_, key, _keycode, state| {
             if accel_matches(&keybindings.history_up, key, state) && entry.text().is_empty() {
                     let queries = request_search_history(10);
@@ -329,6 +333,14 @@ pub(crate) fn install_keyboard_handler(
                     selection.set_selected(0);
                     list_view.scroll_to(0, gtk::ListScrollFlags::NONE, None);
                     status_bar.hide();
+                    // The list_view/scrolled are hidden by default on
+                    // empty-entry state (window.rs:455). Force them
+                    // visible here, otherwise the synthetic history
+                    // hits are loaded into the model silently and the
+                    // user sees nothing.
+                    chips_container.set_visible(true);
+                    scrolled.set_visible(true);
+                    scrolled.set_vexpand(true);
                     glib::signal::Propagation::Stop
             } else {
                 glib::signal::Propagation::Proceed

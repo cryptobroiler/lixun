@@ -338,6 +338,8 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         &model,
         std::rc::Rc::clone(&chips_rc),
         std::rc::Rc::clone(&status_bar),
+        &scrolled,
+        &chips_rc.container,
         ipc.clone(),
         daemon_config.keybindings.clone(),
         std::rc::Rc::clone(&controller),
