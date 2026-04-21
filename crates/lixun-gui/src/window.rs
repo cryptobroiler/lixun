@@ -209,7 +209,46 @@ impl LauncherController {
     /// fired during the Space → preview handoff), and we only need
     /// to invalidate the cache so the next show opens blank.
     pub(crate) fn drop_cached_session(&self) {
+        // Also scrub the live UI state. The launcher window is
+        // hidden at this point (persist_session fired during the
+        // Space → preview handoff), but its entry text, model
+        // rows, and selection are still populated — they were
+        // intentionally preserved on soft-hide so the cached
+        // snapshot could restore them. Without wiping them here,
+        // the next show() sees cached_session=None, skips
+        // restore_session, and presents the window with whatever
+        // the pre-hide UI state happened to be — which is exactly
+        // what the user reports as "Super+Space opens with old
+        // query and old selection after launching from preview".
         self.cached_session.borrow_mut().take();
+        self.user_selected_override.set(false);
+
+        if let Some(id) = self.pending_debounce.borrow_mut().take() {
+            id.remove();
+        }
+
+        self.entry.set_text("");
+        self.chips.activate_index(0);
+        self.current_category.set(None);
+        self.filter.changed(gtk::FilterChange::Different);
+
+        self.selection
+            .set_autoselect(false);
+        let n = self.model.n_items();
+        for _ in 0..n {
+            self.model.remove(0);
+        }
+        self.selection
+            .set_selected(gtk::INVALID_LIST_POSITION);
+        self.selection.set_autoselect(true);
+        clear_cached_hits();
+
+        self.scrolled.set_visible(false);
+        self.scrolled.set_vexpand(false);
+        self.chips.container.set_visible(false);
+        self.status.hide();
+
+        self.last_query.borrow_mut().clear();
     }
 
     /// Mark the selection as user-chosen so the response poller's
