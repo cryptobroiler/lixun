@@ -34,8 +34,12 @@ struct ConfigToml {
 struct GuiToml {
     width_percent: Option<u8>,
     height_percent: Option<u8>,
+    max_width_px: Option<i32>,
+    max_height_px: Option<i32>,
     preview_width_percent: Option<u8>,
     preview_height_percent: Option<u8>,
+    preview_max_width_px: Option<i32>,
+    preview_max_height_px: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -159,19 +163,25 @@ pub struct Config {
 
 /// Launcher + preview window sizing policy. Percentages are of the
 /// monitor the window opens on (resolved at window-build time).
-/// Values outside 10-95 are clamped — a 5% window is unusable, and
-/// 100% covers the entire monitor with no breathing room.
+/// Percent values outside 10-95 are clamped.
 ///
-/// Launcher and preview have separate percentages because they have
-/// different UX expectations: the launcher is a narrow Spotlight-
-/// style entry that lists results, the preview pane needs room to
-/// show whole documents and media at legible size.
+/// Pixel caps (`max_*_px`) impose an absolute ceiling regardless of
+/// monitor size — this matches Spotlight on macOS, where the
+/// launcher stays around 680 pt and the Quick Look pane at around
+/// 1800×1200 pt even on a 6K display, avoiding windows that feel
+/// oversized on large monitors.
+///
+/// Effective size is `min(percent * monitor, max_px)`.
 #[derive(Debug, Clone)]
 pub struct GuiConfig {
     pub width_percent: u8,
     pub height_percent: u8,
+    pub max_width_px: i32,
+    pub max_height_px: i32,
     pub preview_width_percent: u8,
     pub preview_height_percent: u8,
+    pub preview_max_width_px: i32,
+    pub preview_max_height_px: i32,
 }
 
 impl Default for GuiConfig {
@@ -179,8 +189,12 @@ impl Default for GuiConfig {
         Self {
             width_percent: 40,
             height_percent: 60,
+            max_width_px: 900,
+            max_height_px: 800,
             preview_width_percent: 80,
             preview_height_percent: 80,
+            preview_max_width_px: 2000,
+            preview_max_height_px: 1400,
         }
     }
 }
@@ -369,11 +383,23 @@ impl Config {
             if let Some(v) = gui.height_percent {
                 cfg.gui.height_percent = v.clamp(10, 95);
             }
+            if let Some(v) = gui.max_width_px {
+                cfg.gui.max_width_px = v.max(200);
+            }
+            if let Some(v) = gui.max_height_px {
+                cfg.gui.max_height_px = v.max(200);
+            }
             if let Some(v) = gui.preview_width_percent {
                 cfg.gui.preview_width_percent = v.clamp(10, 95);
             }
             if let Some(v) = gui.preview_height_percent {
                 cfg.gui.preview_height_percent = v.clamp(10, 95);
+            }
+            if let Some(v) = gui.preview_max_width_px {
+                cfg.gui.preview_max_width_px = v.max(400);
+            }
+            if let Some(v) = gui.preview_max_height_px {
+                cfg.gui.preview_max_height_px = v.max(400);
             }
         }
 

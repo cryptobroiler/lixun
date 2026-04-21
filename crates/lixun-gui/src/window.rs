@@ -203,8 +203,10 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     // / min-height act as absolute floors.
     if let Some(monitor) = display.monitors().item(0).and_downcast::<gtk::gdk::Monitor>() {
         let geom = monitor.geometry();
-        let w = geom.width() * i32::from(daemon_config.gui.width_percent) / 100;
-        let h = geom.height() * i32::from(daemon_config.gui.height_percent) / 100;
+        let w = (geom.width() * i32::from(daemon_config.gui.width_percent) / 100)
+            .min(daemon_config.gui.max_width_px);
+        let h = (geom.height() * i32::from(daemon_config.gui.height_percent) / 100)
+            .min(daemon_config.gui.max_height_px);
         window.set_default_size(w, h);
         window.set_size_request(w, h);
     }
