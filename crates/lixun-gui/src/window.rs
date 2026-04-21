@@ -95,6 +95,17 @@ pub(crate) struct LauncherController {
     /// search. Critical for selection preservation — see
     /// `restore_session` docstring.
     is_restoring: std::rc::Rc<std::cell::Cell<bool>>,
+    /// True when the user has explicitly moved the cursor off the
+    /// top row (↑ / ↓ / click / restored via cached session). The
+    /// response poller only preserves selection by DocId when this
+    /// is true; a fresh keystroke, which clears the flag, makes the
+    /// poller always snap to row 0 so ranking order wins (Spotlight
+    /// semantic). Without this, the preserve-by-DocId path — useful
+    /// during silent refresh — would also chase the previous row's
+    /// DocId across every keystroke, warping the cursor to wherever
+    /// the new ranking happens to place it (reported as "ends up in
+    /// middle of list after second query").
+    user_selected_override: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl LauncherController {
@@ -201,6 +212,15 @@ impl LauncherController {
         self.cached_session.borrow_mut().take();
     }
 
+    /// Mark the selection as user-chosen so the response poller's
+    /// preserve-by-DocId path activates on the next reply. Called
+    /// by keymap navigation (↑/↓/Ctrl variants) and factory
+    /// click/tap handlers. Cleared automatically on fresh keystroke
+    /// in the entry handler.
+    pub(crate) fn mark_user_selected(&self) {
+        self.user_selected_override.set(true);
+    }
+
     /// Reset every piece of session state so the next show is clean.
     /// Called by launch-completing actions via `clear_and_hide`,
     /// and on explicit cache invalidation. Bumps `session_epoch`
@@ -211,6 +231,7 @@ impl LauncherController {
     pub(crate) fn clear_session(&self) {
         self.session_epoch.fetch_add(1, Ordering::SeqCst);
         self.cached_session.borrow_mut().take();
+        self.user_selected_override.set(false);
 
         if let Some(id) = self.pending_debounce.borrow_mut().take() {
             id.remove();
@@ -339,6 +360,12 @@ impl LauncherController {
 
         self.entry.set_text(&snapshot.query);
         self.entry.set_position(-1);
+
+        // The restored cursor is user intent from the prior session;
+        // arm the override so the silent refresh's poller run
+        // preserves the DocId we just selected rather than snapping
+        // the cursor to row 0.
+        self.user_selected_override.set(true);
 
         let epoch = self.session_epoch.load(Ordering::SeqCst);
         let _ = self
@@ -505,6 +532,8 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         std::rc::Rc::new(std::cell::RefCell::new(None));
     let is_restoring: std::rc::Rc<std::cell::Cell<bool>> =
         std::rc::Rc::new(std::cell::Cell::new(false));
+    let user_selected_override: std::rc::Rc<std::cell::Cell<bool>> =
+        std::rc::Rc::new(std::cell::Cell::new(false));
 
     let controller = std::rc::Rc::new(LauncherController {
         window: window.clone(),
@@ -523,6 +552,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         cached_session: std::rc::Rc::clone(&cached_session),
         ipc: ipc.clone(),
         is_restoring: std::rc::Rc::clone(&is_restoring),
+        user_selected_override: std::rc::Rc::clone(&user_selected_override),
     });
 
     let close_action = gio::SimpleAction::new("close-launcher", None);
@@ -549,6 +579,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         scrolled.clone(),
         std::rc::Rc::clone(&status_bar),
         std::rc::Rc::clone(&last_query),
+        std::rc::Rc::clone(&user_selected_override),
     );
 
     install_entry_handler(
@@ -563,6 +594,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         std::rc::Rc::clone(&pending_debounce),
         Arc::clone(&session_epoch),
         std::rc::Rc::clone(&is_restoring),
+        std::rc::Rc::clone(&user_selected_override),
     );
 
     crate::keymap::install_keyboard_handler(
@@ -616,6 +648,7 @@ fn install_response_poller(
     scrolled: gtk::ScrolledWindow,
     status: std::rc::Rc<StatusBar>,
     last_query: std::rc::Rc<std::cell::RefCell<String>>,
+    user_selected_override: std::rc::Rc<std::cell::Cell<bool>>,
 ) {
     let responses = Arc::clone(&ipc.responses);
     let calculation = Arc::clone(&ipc.calculation);
@@ -634,13 +667,26 @@ fn install_response_poller(
             // is present in the new hits we restore the cursor
             // there; otherwise we fall back to position 0 as a new
             // search does.
-            let prior_selected = {
+            // DocId-based selection preservation only runs when
+            // the user has explicitly moved the cursor off row 0
+            // (via ↑/↓/click/restored snapshot). On plain typing
+            // the override is cleared by the entry handler, and
+            // the poller snaps to row 0 so ranking order wins —
+            // matching the Spotlight UX where each new query
+            // starts at the top. Without this distinction, the
+            // cursor landed on row 0 after one keystroke, then
+            // chased that row 0 DocId into wherever the next
+            // ranking placed it (often mid-list or near the end).
+            let preserve_doc_id = user_selected_override.get();
+            let prior_selected = if preserve_doc_id {
                 let idx = selection.selected();
                 selection.item(idx).and_then(|obj| {
                     obj.downcast::<gtk::StringObject>()
                         .ok()
                         .map(|s| s.string().to_string())
                 })
+            } else {
+                None
             };
             let hits_snapshot = {
                 let mut hits = responses.lock().unwrap();
@@ -728,6 +774,7 @@ fn install_entry_handler(
     pending_debounce: std::rc::Rc<std::cell::RefCell<Option<glib::SourceId>>>,
     session_epoch: Arc<AtomicU64>,
     is_restoring: std::rc::Rc<std::cell::Cell<bool>>,
+    user_selected_override: std::rc::Rc<std::cell::Cell<bool>>,
 ) {
     entry.connect_changed(move |e| {
         if is_restoring.get() {
@@ -753,12 +800,17 @@ fn install_entry_handler(
             }
             selection.set_selected(gtk::INVALID_LIST_POSITION);
             selection.set_autoselect(true);
+            user_selected_override.set(false);
             chips_container.set_visible(false);
             scrolled.set_visible(false);
             scrolled.set_vexpand(false);
             status.hide();
             return;
         }
+
+        // Fresh keystroke => fresh ranking, row 0 wins. Clear the
+        // override so the poller snaps to row 0 on this response.
+        user_selected_override.set(false);
 
         chips_container.set_visible(true);
 

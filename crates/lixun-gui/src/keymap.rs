@@ -227,6 +227,7 @@ pub(crate) fn install_keyboard_handler(
                         let target = selection.selected();
                         if target != gtk::INVALID_LIST_POSITION {
                             scroll_with_margin(&list_view, &selection, target, -1);
+                            controller.mark_user_selected();
                         }
                         if entry_had_focus {
                             list_view.grab_focus();
@@ -237,6 +238,7 @@ pub(crate) fn install_keyboard_handler(
                     if current > 0 {
                         let target = current - 1;
                         selection.set_selected(target);
+                        controller.mark_user_selected();
                         scroll_with_margin(&list_view, &selection, target, -1);
                         if entry_had_focus {
                             list_view.grab_focus();
@@ -258,6 +260,7 @@ pub(crate) fn install_keyboard_handler(
                         let target = selection.selected();
                         if target != gtk::INVALID_LIST_POSITION {
                             scroll_with_margin(&list_view, &selection, target, 1);
+                            controller.mark_user_selected();
                         }
                         if entry_had_focus {
                             list_view.grab_focus();
@@ -269,6 +272,7 @@ pub(crate) fn install_keyboard_handler(
                     if current + 1 < n {
                         let target = current + 1;
                         selection.set_selected(target);
+                        controller.mark_user_selected();
                         scroll_with_margin(&list_view, &selection, target, 1);
                     }
                     if entry_had_focus && n > 0 {
