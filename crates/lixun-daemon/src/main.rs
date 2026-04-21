@@ -128,7 +128,7 @@ async fn main() -> Result<()> {
     let query_log = Arc::new(RwLock::new(query_log));
 
     let gui_control = Arc::new(GuiControl::new());
-    let preview_spawner = Arc::new(PreviewSpawner::new());
+    let preview_spawner = Arc::new(PreviewSpawner::new(Arc::clone(&gui_control)));
 
     let global_toggle_rx = hotkeys::spawn_global_toggle_listener(
         shared_config.keybindings.global_toggle.clone(),

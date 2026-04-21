@@ -35,6 +35,17 @@ const MIN_WIDTH: i32 = 600;
 const MIN_HEIGHT: i32 = 400;
 const FOCUS_LEAVE_LATCH: Duration = Duration::from_millis(150);
 
+/// Process exit code used when the user launched the hit's default
+/// application from within the preview (Enter, Open button). The
+/// daemon's `PreviewSpawner` watches the child's exit status and
+/// treats this code as "task completed — do NOT re-show the
+/// launcher". Any other exit (0 for plain close, non-zero for
+/// crash, any signal) means the user dismissed the preview without
+/// launching, and the launcher should reappear with its persisted
+/// session state. Chosen as 42 to avoid collision with GTK's
+/// typical exit codes (0, 1) and standard Unix signal+128 codes.
+const EXIT_CODE_LAUNCHED: i32 = 42;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "lixun-preview",
@@ -294,7 +305,12 @@ fn launch_default_and_quit(path: &std::path::Path, app: &gtk::Application) {
     match gtk::gio::AppInfo::launch_default_for_uri(&uri, gtk::gio::AppLaunchContext::NONE) {
         Ok(()) => {
             tracing::info!("preview: launched default handler for {:?}", path);
+            // app.quit() returns control to the GTK main loop which
+            // tears down the window and exits main(). Exit with the
+            // launched sentinel so the daemon does NOT re-show the
+            // launcher — the user has completed the task.
             app.quit();
+            std::process::exit(EXIT_CODE_LAUNCHED);
         }
         Err(e) => {
             tracing::error!(
