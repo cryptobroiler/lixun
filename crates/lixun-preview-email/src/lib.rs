@@ -21,7 +21,7 @@ use std::fs;
 
 use gtk::prelude::*;
 use lixun_core::{Action, Category, Hit};
-use lixun_preview::{PreviewPlugin, PreviewPluginCfg, PreviewPluginEntry};
+use lixun_preview::{PreviewPlugin, PreviewPluginCfg, PreviewPluginEntry, SizingPreference};
 use mail_parser::{Address, MessageParser, MimeHeaders};
 
 const MAX_EMAIL_BYTES: usize = 8 * 1024 * 1024;
@@ -64,6 +64,10 @@ impl PreviewPlugin for EmailPreview {
         }
 
         0
+    }
+
+    fn sizing(&self) -> SizingPreference {
+        SizingPreference::FitToContent
     }
 
     fn build(&self, hit: &Hit, _cfg: &PreviewPluginCfg<'_>) -> anyhow::Result<gtk::Widget> {
@@ -125,8 +129,12 @@ impl PreviewPlugin for EmailPreview {
         scroll.set_child(Some(&vbox));
         scroll.set_hscrollbar_policy(gtk::PolicyType::Automatic);
         scroll.set_vscrollbar_policy(gtk::PolicyType::Automatic);
-        scroll.set_hexpand(true);
-        scroll.set_vexpand(true);
+        // See preview-text for the natural-width-zero rationale.
+        // Email needs more horizontal room than a plain text file
+        // because the header grid wants ~two columns of readable
+        // width plus the body paragraph wraps beside it.
+        scroll.set_min_content_width(720);
+        scroll.set_min_content_height(320);
 
         tracing::info!("email: rendered {:?} bytes={}", path, capped.len());
         Ok(scroll.upcast())
@@ -192,8 +200,10 @@ fn build_from_hit_fields(hit: &Hit) -> gtk::Widget {
     scroll.set_child(Some(&vbox));
     scroll.set_hscrollbar_policy(gtk::PolicyType::Automatic);
     scroll.set_vscrollbar_policy(gtk::PolicyType::Automatic);
-    scroll.set_hexpand(true);
-    scroll.set_vexpand(true);
+    // Match the .eml path's floor so gloda-path and file-path email
+    // previews open at the same visual size for the same message.
+    scroll.set_min_content_width(720);
+    scroll.set_min_content_height(320);
 
     tracing::info!(
         "email: rendered from Hit fields (gloda path) hit_id={} body_len={}",
