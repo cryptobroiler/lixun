@@ -8,6 +8,7 @@ use anyhow::Result;
 use bytes::{BufMut, BytesMut};
 use chrono::Utc;
 use futures::StreamExt;
+use lixun_ipc::gui::{GuiCommand, GuiResponse};
 use lixun_ipc::{MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, Request, Response, socket_path};
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
@@ -21,10 +22,10 @@ use history::ClickHistory;
 use query_log::QueryLog;
 
 use lixun_daemon::config;
+use lixun_daemon::gui_control::GuiControl;
 use lixun_daemon::hotkeys;
 use lixun_daemon::index_service::{self, IndexMutationTx, SearchHandle};
 use lixun_daemon::indexer;
-use lixun_daemon::session_env;
 
 use lixun_indexer::plugin_fs_watcher;
 use lixun_indexer::watcher;
@@ -37,87 +38,15 @@ struct IndexStats {
     reindex_started: Option<chrono::DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Default)]
-struct GuiState {
-    visible: bool,
-    pid: Option<u32>,
-}
-
-fn process_alive(pid: u32) -> bool {
-    // Treat zombie (exited but not reaped) processes as NOT alive.
-    // kill(pid, 0) returns 0 even for zombies, so we also inspect /proc status.
-    let rc = unsafe { libc::kill(pid as i32, 0) };
-    let kill_said_alive = rc == 0
-        || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
-    if !kill_said_alive {
-        return false;
+/// Map a transport `Result<GuiResponse>` to the daemon's public
+/// `Response::Visibility` wire type. Transport errors and semantic
+/// errors both surface as `Response::Error`.
+fn gui_result_to_response(r: anyhow::Result<GuiResponse>) -> Response {
+    match r {
+        Ok(GuiResponse::Ok { visible }) => Response::Visibility { visible },
+        Ok(GuiResponse::Error(msg)) => Response::Error(format!("gui: {msg}")),
+        Err(e) => Response::Error(format!("gui_control: {e}")),
     }
-    let status_path = format!("/proc/{}/status", pid);
-    let Ok(status) = std::fs::read_to_string(&status_path) else {
-        return false;
-    };
-    for line in status.lines() {
-        if let Some(rest) = line.strip_prefix("State:") {
-            let trimmed = rest.trim_start();
-            if trimmed.starts_with('Z') || trimmed.starts_with('X') {
-                return false;
-            }
-            return true;
-        }
-    }
-    true
-}
-
-fn spawn_gui(
-    gui_state: Arc<RwLock<GuiState>>,
-) -> anyhow::Result<u32> {
-    let mut cmd = tokio::process::Command::new("lixun-gui");
-    let env = session_env::discover_gui_env();
-    for (k, v) in &env {
-        cmd.env(k, v);
-    }
-    let mut child = cmd.spawn()?;
-    let pid = child
-        .id()
-        .ok_or_else(|| anyhow::anyhow!("spawned lixun-gui has no pid"))?;
-    tracing::info!(
-        "spawn_gui: lixun-gui started pid={} env_keys={:?}",
-        pid,
-        env.keys().collect::<Vec<_>>()
-    );
-    tokio::spawn(async move {
-        let status = child.wait().await;
-        let mut state = gui_state.write().await;
-        if state.pid == Some(pid) {
-            state.pid = None;
-            state.visible = false;
-        }
-        match status {
-            Ok(s) if !s.success() => {
-                tracing::warn!(
-                    "spawn_gui: lixun-gui pid={} exited with {:?}",
-                    pid, s
-                );
-            }
-            Ok(s) => {
-                tracing::debug!(
-                    "spawn_gui: lixun-gui pid={} exited ok ({:?})",
-                    pid, s
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "spawn_gui: lixun-gui pid={} wait failed: {}",
-                    pid, e
-                );
-            }
-        }
-    });
-    Ok(pid)
-}
-
-fn terminate_gui(pid: u32) {
-    let _ = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
 }
 
 fn pid_path() -> std::path::PathBuf {
@@ -197,7 +126,7 @@ async fn main() -> Result<()> {
     let query_log = QueryLog::load(&state_dir)?;
     let query_log = Arc::new(RwLock::new(query_log));
 
-    let gui_state = Arc::new(RwLock::new(GuiState::default()));
+    let gui_control = Arc::new(GuiControl::new());
 
     let global_toggle_rx = hotkeys::spawn_global_toggle_listener(
         shared_config.keybindings.global_toggle.clone(),
@@ -318,29 +247,8 @@ async fn main() -> Result<()> {
                     continue;
                 };
                 tracing::info!("hotkey: global toggle activated");
-                let mut state = gui_state.write().await;
-                if let Some(pid) = state.pid
-                    && !process_alive(pid)
-                {
-                    tracing::debug!("hotkey: stale pid={} cleared", pid);
-                    state.pid = None;
-                    state.visible = false;
-                }
-                if state.visible {
-                    if let Some(pid) = state.pid {
-                        tracing::info!("hotkey: hiding pid={}", pid);
-                        terminate_gui(pid);
-                    }
-                    state.pid = None;
-                    state.visible = false;
-                } else {
-                    match spawn_gui(Arc::clone(&gui_state)) {
-                        Ok(pid) => {
-                            state.pid = Some(pid);
-                            state.visible = true;
-                        }
-                        Err(e) => tracing::error!("Failed to spawn GUI from global shortcut: {}", e),
-                    }
+                if let Err(e) = gui_control.dispatch(GuiCommand::Toggle).await {
+                    tracing::error!("hotkey: gui_control dispatch failed: {}", e);
                 }
             }
             result = listener.accept() => {
@@ -356,18 +264,19 @@ async fn main() -> Result<()> {
                 let history = Arc::clone(&history);
                 let query_log = Arc::clone(&query_log);
                 let stats = Arc::clone(&stats);
-                let gui_state = Arc::clone(&gui_state);
+                let gui_control = Arc::clone(&gui_control);
                 let shared_config = Arc::clone(&shared_config);
                 let client_registry = Arc::clone(&registry);
 
                 tokio::spawn(async move {
-                    if let Err(e) = handle_client(stream, search, mutation_tx, history, query_log, stats, gui_state, shared_config, client_registry).await {
+                    if let Err(e) = handle_client(stream, search, mutation_tx, history, query_log, stats, gui_control, shared_config, client_registry).await {
                         tracing::debug!("Client error: {}", e);
                     }
                 });
             }
             _ = shutdown_rx.recv() => {
                 tracing::info!("Shutting down gracefully...");
+                gui_control.shutdown().await;
                 let _ = std::fs::remove_file(&socket_path);
                 let history = history.read().await;
                 if let Err(e) = history.save(&state_dir) {
@@ -494,7 +403,7 @@ async fn handle_client(
     history: Arc<RwLock<ClickHistory>>,
     query_log: Arc<RwLock<QueryLog>>,
     stats: Arc<RwLock<IndexStats>>,
-    gui_state: Arc<RwLock<GuiState>>,
+    gui_control: Arc<GuiControl>,
     config: Arc<config::Config>,
     registry: Arc<lixun_indexer::SourceRegistry>,
 ) -> anyhow::Result<()> {
@@ -525,67 +434,9 @@ async fn handle_client(
     let req: Request = serde_json::from_slice(&buf)?;
 
     let resp = match req {
-        Request::Toggle => {
-            let mut state = gui_state.write().await;
-            if let Some(pid) = state.pid
-                && !process_alive(pid)
-            {
-                tracing::debug!("toggle: stale pid={} cleared", pid);
-                state.pid = None;
-                state.visible = false;
-            }
-
-            if state.visible {
-                if let Some(pid) = state.pid {
-                    tracing::info!("toggle: hiding, terminating pid={}", pid);
-                    terminate_gui(pid);
-                }
-                state.pid = None;
-                state.visible = false;
-            } else {
-                tracing::info!("toggle: spawning gui");
-                let pid = spawn_gui(Arc::clone(&gui_state))?;
-                state.pid = Some(pid);
-                state.visible = true;
-            }
-            Response::Visibility {
-                visible: state.visible,
-            }
-        }
-        Request::Show => {
-            let mut state = gui_state.write().await;
-            if let Some(pid) = state.pid
-                && !process_alive(pid)
-            {
-                tracing::debug!("show: stale pid={} cleared", pid);
-                state.pid = None;
-                state.visible = false;
-            }
-            if !state.visible {
-                tracing::info!("show: spawning gui");
-                let pid = spawn_gui(Arc::clone(&gui_state))?;
-                state.pid = Some(pid);
-                state.visible = true;
-            } else {
-                tracing::debug!(
-                    "show: already visible pid={:?}, no-op",
-                    state.pid
-                );
-            }
-            Response::Visibility { visible: state.visible }
-        }
-        Request::Hide => {
-            let mut state = gui_state.write().await;
-            if let Some(pid) = state.pid {
-                tracing::info!("hide: terminating pid={}", pid);
-                terminate_gui(pid);
-            } else {
-                tracing::debug!("hide: no gui running, no-op");
-            }
-            state.pid = None;
-            state.visible = false;
-            Response::Visibility { visible: false }
-        }
+        Request::Toggle => gui_result_to_response(gui_control.dispatch(GuiCommand::Toggle).await),
+        Request::Show => gui_result_to_response(gui_control.dispatch(GuiCommand::Show).await),
+        Request::Hide => gui_result_to_response(gui_control.dispatch(GuiCommand::Hide).await),
         Request::Search { q, limit } => match search.search(&lixun_core::Query { text: q.clone(), limit }).await {
             Ok(mut hits) => {
                 let history = history.read().await;

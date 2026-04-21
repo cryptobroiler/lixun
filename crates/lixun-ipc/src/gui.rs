@@ -109,6 +109,61 @@ where
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
+/// Async counterpart of [`write_frame_sync`]. Same byte layout; intended
+/// for the daemon side which has a tokio runtime.
+pub async fn write_frame_async<W, T>(w: &mut W, msg: &T) -> std::io::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    T: Serialize,
+{
+    use tokio::io::AsyncWriteExt;
+    let json = serde_json::to_vec(msg)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let total_len: u32 = (2 + json.len())
+        .try_into()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "frame too large"))?;
+    let mut buf = Vec::with_capacity(4 + 2 + json.len());
+    buf.extend_from_slice(&total_len.to_be_bytes());
+    buf.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+    buf.extend_from_slice(&json);
+    w.write_all(&buf).await
+}
+
+/// Async counterpart of [`read_frame_sync`]. Same byte layout.
+pub async fn read_frame_async<R, T>(r: &mut R) -> std::io::Result<T>
+where
+    R: tokio::io::AsyncRead + Unpin,
+    T: serde::de::DeserializeOwned,
+{
+    use tokio::io::AsyncReadExt;
+    let mut header = [0u8; 4];
+    r.read_exact(&mut header).await?;
+    let total_len = u32::from_be_bytes(header) as usize;
+    if total_len < 2 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "frame too short for version",
+        ));
+    }
+    let mut version_buf = [0u8; 2];
+    r.read_exact(&mut version_buf).await?;
+    let version = u16::from_be_bytes(version_buf);
+    if version != PROTOCOL_VERSION {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "version mismatch: expected {}, got {}",
+                PROTOCOL_VERSION, version
+            ),
+        ));
+    }
+    let payload_len = total_len - 2;
+    let mut payload = vec![0u8; payload_len];
+    r.read_exact(&mut payload).await?;
+    serde_json::from_slice(&payload)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +276,55 @@ mod tests {
         let p = gui_socket_path();
         let s = p.to_string_lossy();
         assert!(s.contains("lixun-gui.sock") || s.contains("lixun-gui-"));
+    }
+
+    #[tokio::test]
+    async fn async_roundtrip_cmd() {
+        let mut buf = Vec::<u8>::new();
+        write_frame_async(&mut buf, &GuiCommand::Toggle).await.unwrap();
+        let mut cur = Cursor::new(buf);
+        let c: GuiCommand = read_frame_async(&mut cur).await.unwrap();
+        assert_eq!(c, GuiCommand::Toggle);
+    }
+
+    #[tokio::test]
+    async fn async_roundtrip_response() {
+        let mut buf = Vec::<u8>::new();
+        let r = GuiResponse::Ok { visible: true };
+        write_frame_async(&mut buf, &r).await.unwrap();
+        let mut cur = Cursor::new(buf);
+        let out: GuiResponse = read_frame_async(&mut cur).await.unwrap();
+        assert_eq!(out, r);
+    }
+
+    #[tokio::test]
+    async fn async_version_mismatch_rejected() {
+        let mut buf = Vec::<u8>::new();
+        let json = serde_json::to_vec(&GuiCommand::Show).unwrap();
+        let total_len: u32 = (2 + json.len()) as u32;
+        buf.extend_from_slice(&total_len.to_be_bytes());
+        buf.extend_from_slice(&99u16.to_be_bytes());
+        buf.extend_from_slice(&json);
+        let mut cur = Cursor::new(buf);
+        let r: std::io::Result<GuiCommand> = read_frame_async(&mut cur).await;
+        assert!(r.is_err());
+    }
+
+    #[tokio::test]
+    async fn sync_written_frame_decodes_async() {
+        let mut buf = Vec::<u8>::new();
+        write_frame_sync(&mut buf, &GuiCommand::Quit).unwrap();
+        let mut cur = Cursor::new(buf);
+        let c: GuiCommand = read_frame_async(&mut cur).await.unwrap();
+        assert_eq!(c, GuiCommand::Quit);
+    }
+
+    #[tokio::test]
+    async fn async_written_frame_decodes_sync() {
+        let mut buf = Vec::<u8>::new();
+        write_frame_async(&mut buf, &GuiCommand::Ping).await.unwrap();
+        let mut cur = Cursor::new(buf);
+        let c: GuiCommand = read_frame_sync(&mut cur).unwrap();
+        assert_eq!(c, GuiCommand::Ping);
     }
 }
