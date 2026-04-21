@@ -15,7 +15,7 @@
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7),
                 0 8px 16px rgba(0, 0, 0, 0.5);
     min-width: 720px;
-    min-height: 560px;
+    min-height: 640px;
 }
 
 /* ----- Search entry ----- */
@@ -43,12 +43,17 @@
 /* ----- Results container -----
    Tall enough to comfortably show ~10 hits after the selected row,
    avoiding the 'selected row is the last visible, no context below'
-   trap that preceded BUG-6 redesign. */
+   trap that preceded BUG-6 redesign.
+   padding-bottom reserves space so the last visible row does not
+   get clipped at the viewport edge — the ScrolledWindow only
+   scrolls to make rows 'at least fit', and without padding the
+   bottom row sits flush and clips its descender/outline. */
 .lixun-results {
     background-color: transparent;
     border-top: 1px solid rgba(255, 255, 255, 0.04);
     padding-top: 4px;
-    min-height: 480px;
+    padding-bottom: 8px;
+    min-height: 520px;
 }
 
 /* ----- Hit row ----- */
@@ -74,13 +79,12 @@ listview row:selected:hover {
     background-image: none;
 }
 
-/* Keyboard focus ring: neutral white so it stacks cleanly on top of
-   the hero frame without competing for color attention. */
-row:focus-within .lixun-hit,
-.lixun-hit:focus-within {
-    outline: 2px solid rgba(255, 255, 255, 0.55);
-    outline-offset: -2px;
-}
+/* No focus ring on the row itself — selection is carried by
+   `.lixun-top-hit` (background + bigger title + card outline),
+   and an extra white outline on every focused row stacks visual
+   noise on top of it. Keyboard accessibility is unaffected:
+   arrow-key navigation still moves the SingleSelection, which
+   updates `.lixun-top-hit` via apply_selected_styling. */
 
 /* Hero (top-hit) row: card-like elevation. The row factory toggles
    `.lixun-top-hit` onto the selected item only, so this class is
