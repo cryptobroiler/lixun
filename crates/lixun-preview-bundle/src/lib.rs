@@ -21,14 +21,16 @@
 
 use lixun_preview as _;
 
+#[cfg(feature = "text")]
+use lixun_preview_text as _;
+
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn bundle_links_the_trait_crate() {
-        use lixun_core::{Action, Category, DocId, Hit};
-        use std::path::PathBuf;
+    use lixun_core::{Action, Category, DocId, Hit};
+    use std::path::PathBuf;
 
-        let hit = Hit {
+    fn text_hit() -> Hit {
+        Hit {
             id: DocId("fs:/tmp/demo.txt".into()),
             category: Category::File,
             title: "demo.txt".into(),
@@ -40,7 +42,46 @@ mod tests {
                 path: PathBuf::from("/tmp/demo.txt"),
             },
             extract_fail: false,
-        };
-        assert!(lixun_preview::select_plugin(&hit).is_none());
+        }
+    }
+
+    fn non_file_hit() -> Hit {
+        Hit {
+            id: DocId("app:firefox".into()),
+            category: Category::App,
+            title: "Firefox".into(),
+            subtitle: String::new(),
+            icon_name: None,
+            kind_label: None,
+            score: 0.0,
+            action: Action::Launch {
+                exec: "firefox".into(),
+                terminal: false,
+                desktop_id: None,
+                desktop_file: None,
+                working_dir: None,
+            },
+            extract_fail: false,
+        }
+    }
+
+    #[cfg(feature = "text")]
+    #[test]
+    fn text_feature_routes_txt_to_text_plugin() {
+        let picked = lixun_preview::select_plugin(&text_hit())
+            .expect("with `text` feature enabled a .txt hit must match some plugin");
+        assert_eq!(
+            picked.id(),
+            "text",
+            "expected the `text` plugin to win for a .txt hit"
+        );
+    }
+
+    #[test]
+    fn non_file_hits_do_not_match_any_registered_plugin() {
+        assert!(
+            lixun_preview::select_plugin(&non_file_hit()).is_none(),
+            "app/launch hits must fall through select_plugin"
+        );
     }
 }

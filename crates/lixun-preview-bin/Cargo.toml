@@ -8,7 +8,7 @@ name = "lixun-preview"
 path = "src/main.rs"
 
 [features]
-default = ["stub"]
+default = []
 stub = []
 
 [dependencies]
