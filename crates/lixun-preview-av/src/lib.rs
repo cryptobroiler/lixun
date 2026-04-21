@@ -1,29 +1,62 @@
 //! Audio/video preview plugin.
 //!
-//! Thin wrapper around `gtk::Video`. GTK 4.12+ ships its own
-//! `GtkMediaFile` backend that uses GStreamer under the hood — we
-//! do not add a direct `gstreamer` crate dep, which keeps the
-//! build tree small and lets the distro's gstreamer plugin stack
-//! (`plugins-base`/`-good`/`-bad`/`-ugly`) drive codec coverage.
+//! GTK 4.12+ ships its own `GtkMediaFile` backend that uses
+//! GStreamer under the hood — we do not add a direct `gstreamer`
+//! crate dep, which keeps the build tree small and lets the
+//! distro's gstreamer plugin stack
+//! (`plugins-base`/`-good`/`-bad`/`-ugly`/`-libav`) drive codec
+//! coverage.
+//!
+//! # Audio vs video dispatch (BUG-2 fix, 2026-04-21)
+//!
+//! The first iteration of this plugin routed every hit through
+//! `gtk::Video` unconditionally. That widget expects at least one
+//! video stream in the pipeline; feeding an audio-only MP3/FLAC/…
+//! to it triggers a gstreamer assertion inside `decodebin3` at
+//! `mq_slot_handle_stream_start: assertion failed: (collection)`
+//! which aborts the whole preview process with SIGABRT. Discovered
+//! during tier-2 runtime QA on `audio.mp3` from the probe corpus.
+//!
+//! Current contract:
+//!
+//! - **Video extensions** (`AUDIO_EXTENSIONS` is checked first, so
+//!   order matters — a hypothetical file with an extension in both
+//!   lists would get the audio branch): use `gtk::Video` with
+//!   `set_autoplay(false)`. The built-in transport overlay is
+//!   rendered by the widget.
+//! - **Audio extensions**: use a `gtk::Image` with an
+//!   audio-x-generic icon as the visual placeholder plus a
+//!   separate `gtk::MediaControls` holding the stream. This path
+//!   does NOT go through `GtkVideo`, so `decodebin3` is not asked
+//!   to produce a video stream, and the audio-only assertion does
+//!   not fire. We keep a strong `Rc` reference to the
+//!   `gtk::MediaFile` alive by attaching it to the container via
+//!   `unsafe_set_data` — GTK owns the controls widget but the
+//!   stream object's lifetime must outlive the controls or the
+//!   transport freezes.
+//!
+//! # Autoplay
+//!
+//! v1 deliberately does NOT autoplay. Pressing Space on a result
+//! opens a preview in a focused overlay — a surprise 5-second
+//! sine-wave blast is bad UX. The user hits the built-in play
+//! button when they want to hear or watch the content.
 //!
 //! # Space semantics
 //!
 //! The preview binary's close controller eats Space to close the
 //! window (G2.8 Decision 4). For AV this means Space closes rather
-//! than play/pause. We accept that as a v1 limitation and surface
-//! the built-in `GtkVideo` transport controls (play/pause button,
-//! seek bar) for all transport interactions. Revisit if dogfood
-//! demands it — the fix would live in the preview binary's
-//! keymap, not here.
+//! than play/pause. We accept that as a v1 limitation; transport
+//! lives on the widget's play/pause button and seek bar.
 //!
 //! # Error handling
 //!
 //! `GtkMediaFile` is lazy: construction does not probe codecs. If
-//! the stream is unsupported, the widget emits an error signal at
-//! play time which GTK renders as a broken-file icon. We do NOT
-//! install a custom error-bus handler here; that error path is
-//! handled visually by the widget. Codec-missing on a fresh system
-//! lands on the same path.
+//! a codec is missing, the widget shows a broken-file glyph.
+//! `decodebin3` assertions on malformed pipelines (video widget +
+//! audio-only stream) bypass this error path and SIGABRT the
+//! process; the dispatch above prevents that by never feeding an
+//! audio-only stream to `gtk::Video` in the first place.
 
 use std::path::Path;
 
@@ -80,23 +113,41 @@ impl PreviewPlugin for AvPreview {
         let media = gtk::MediaFile::for_filename(&path);
         media.set_loop(false);
 
-        let video = gtk::Video::new();
-        video.set_media_stream(Some(&media));
-        video.set_autoplay(true);
-        video.set_hexpand(true);
-        video.set_vexpand(true);
-        video.add_css_class("lixun-preview-av");
-
-        let header = build_header(&path, is_audio(&path));
-
+        let audio_only = is_audio(&path);
+        let header = build_header(&path, audio_only);
         let vbox = gtk::Box::new(gtk::Orientation::Vertical, 8);
         vbox.append(&header);
-        vbox.append(&video);
+
+        if audio_only {
+            let icon = gtk::Image::from_icon_name("audio-x-generic");
+            icon.set_pixel_size(128);
+            icon.set_hexpand(true);
+            icon.set_vexpand(true);
+            icon.add_css_class("lixun-preview-av-audio-icon");
+
+            let controls = gtk::MediaControls::new(Some(&media));
+            controls.add_css_class("lixun-preview-av-controls");
+
+            vbox.append(&icon);
+            vbox.append(&controls);
+
+            unsafe {
+                vbox.set_data::<gtk::MediaFile>("lixun-av-media-stream", media);
+            }
+        } else {
+            let video = gtk::Video::new();
+            video.set_media_stream(Some(&media));
+            video.set_autoplay(false);
+            video.set_hexpand(true);
+            video.set_vexpand(true);
+            video.add_css_class("lixun-preview-av");
+            vbox.append(&video);
+        }
 
         tracing::info!(
             "av: rendered {:?} audio={} video={}",
             path,
-            is_audio(&path),
+            audio_only,
             is_video(&path)
         );
 
@@ -252,5 +303,17 @@ mod tests {
     fn av_beats_code_for_m4v() {
         let hit = file_hit("/tmp/mix.m4v", None);
         assert_eq!(AvPreview.match_score(&hit), 80);
+    }
+
+    #[test]
+    fn audio_and_video_dispatch_disjoint() {
+        for ext in AUDIO_EXTENSIONS {
+            assert!(
+                !VIDEO_EXTENSIONS.contains(ext),
+                "extension {ext} appears in both AUDIO and VIDEO lists \
+                 — audio dispatch would ambiguously route to the audio branch, \
+                 regression against BUG-2 fix contract"
+            );
+        }
     }
 }
