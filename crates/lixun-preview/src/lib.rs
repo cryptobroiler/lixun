@@ -33,6 +33,35 @@ impl<'a> PreviewPluginCfg<'a> {
     }
 }
 
+/// How the preview host should size the window relative to the
+/// plugin's content widget.
+///
+/// Different content types have different notions of "natural
+/// size". A short txt file wants a small window; a 4K photo does
+/// not — its pixbuf-reported natural size is the image itself
+/// (thousands of pixels), which would push the window straight to
+/// the configured ceiling and feel exactly like a fixed window.
+/// So plugins declare their sizing intent explicitly and the host
+/// picks a strategy:
+///
+/// - `FitToContent`: the host starts the window at a small
+///   default, enables `propagate_natural_*` on the content's
+///   scroll container, and lets the content drive the final
+///   window size — clamped at `preview_max_*_px` from config.
+///   Use for plugins whose content reports small, honest natural
+///   sizes (wrapped text, email, code).
+///
+/// - `FixedCap` (default): the host sizes the window to the
+///   configured cap (`preview_*_percent × monitor` clipped to
+///   `preview_max_*_px`), independently of content. Use for
+///   media-like plugins (image, pdf, video, office) where the
+///   content's natural size is either huge or ill-defined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SizingPreference {
+    FitToContent,
+    FixedCap,
+}
+
 /// A format plugin that renders a preview widget for a hit.
 ///
 /// Implementations must:
@@ -49,6 +78,15 @@ pub trait PreviewPlugin: Send + Sync + 'static {
     fn id(&self) -> &'static str;
 
     fn match_score(&self, hit: &Hit) -> u32;
+
+    /// Declared sizing strategy; see `SizingPreference`.
+    ///
+    /// Default is `FixedCap` so existing media-heavy plugins keep
+    /// their current behaviour without needing an override. Text-
+    /// like plugins should return `FitToContent`.
+    fn sizing(&self) -> SizingPreference {
+        SizingPreference::FixedCap
+    }
 
     fn build(&self, hit: &Hit, cfg: &PreviewPluginCfg<'_>) -> anyhow::Result<gtk::Widget>;
 }
@@ -249,5 +287,26 @@ mod tests {
         let cfg = PreviewPluginCfg::none();
         assert!(cfg.section.is_none());
         assert_eq!(cfg.max_file_size_mb, 200);
+    }
+
+    #[test]
+    fn sizing_default_is_fixed_cap() {
+        // Regression guard: changing the default silently would flip
+        // every existing plugin's window behaviour without them
+        // opting in. If a future refactor wants a different default,
+        // every plugin must be re-audited first.
+        struct P;
+        impl PreviewPlugin for P {
+            fn id(&self) -> &'static str {
+                "p"
+            }
+            fn match_score(&self, _: &Hit) -> u32 {
+                0
+            }
+            fn build(&self, _: &Hit, _: &PreviewPluginCfg<'_>) -> anyhow::Result<gtk::Widget> {
+                unreachable!()
+            }
+        }
+        assert_eq!(P.sizing(), SizingPreference::FixedCap);
     }
 }
