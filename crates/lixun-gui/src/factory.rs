@@ -242,8 +242,13 @@ fn install_double_click_open(row: &gtk::Box, hit: &Hit) {
             tracing::error!("double-click open failed: {}", e);
             return;
         }
+        // Double-click = launch-completing action, so tell the
+        // launcher to drop its session cache via the
+        // "clear-and-hide-launcher" app action. The plain "close-
+        // launcher" action does a soft hide that persists state —
+        // wrong for a launch.
         if let Some(app) = gio::Application::default() {
-            app.activate_action("close-launcher", None);
+            app.activate_action("clear-and-hide-launcher", None);
         }
     });
     row.add_controller(gesture);

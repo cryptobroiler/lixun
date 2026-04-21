@@ -300,11 +300,22 @@ pub(crate) fn install_keyboard_handler(
                             tracing::error!("Action failed: {}", e);
                         }
                     });
+                    // Launch-completing action: drop the session cache
+                    // so the next show is a fresh launcher.
+                    // ReplaceQuery keeps the launcher visible and is
+                    // mid-session, so it must NOT clear.
                     if should_hide {
-                        controller.hide();
+                        controller.clear_and_hide();
                     }
                     glib::signal::Propagation::Stop
             } else if accel_matches(&keybindings.copy, key, state) {
+                    // Copy is treated as a completed action (the user
+                    // got what they wanted — a clipboard value), so
+                    // clear the session on hide. But copy itself does
+                    // not close the launcher today; wait for user's
+                    // next Escape/focus-loss, which will hit hide()
+                    // and persist the session again. That's the
+                    // current UX and this commit does not change it.
                     selected_hit_in(&selection, &filter_model, copy_to_clipboard);
                     glib::signal::Propagation::Stop
             } else if accel_matches(&keybindings.quick_look, key, state) && !entry_has_focus(&entry, &window) {
