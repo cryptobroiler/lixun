@@ -1,6 +1,7 @@
 pub mod config;
 pub mod gui_control;
 pub mod hotkeys;
+pub mod preview_spawn;
 pub mod session_env;
 
 pub use lixun_indexer::index_service;
