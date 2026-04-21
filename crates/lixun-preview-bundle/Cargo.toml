@@ -1,0 +1,14 @@
+[package]
+name = "lixun-preview-bundle"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "lixun_preview_bundle"
+path = "src/lib.rs"
+
+[dependencies]
+lixun-preview = { path = "../lixun-preview" }
+
+[dev-dependencies]
+lixun-core = { path = "../lixun-core" }
