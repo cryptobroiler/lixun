@@ -123,6 +123,9 @@ mod tests {
                 path: PathBuf::from("/tmp/demo.txt"),
             },
             extract_fail: false,
+            sender: None,
+            recipients: None,
+            body: None,
         }
     }
 

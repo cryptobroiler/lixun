@@ -220,6 +220,9 @@ mod tests {
             score: 1.0,
             action: Action::OpenFile { path },
             extract_fail: false,
+            sender: None,
+            recipients: None,
+            body: None,
         }
     }
 
@@ -283,6 +286,9 @@ mod tests {
                 working_dir: None,
             },
             extract_fail: false,
+            sender: None,
+            recipients: None,
+            body: None,
         };
         assert_eq!(AvPreview.match_score(&hit), 0);
     }

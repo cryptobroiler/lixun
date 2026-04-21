@@ -86,6 +86,23 @@ pub struct Hit {
     pub score: f32,
     pub action: Action,
     pub extract_fail: bool,
+    /// Email `From` header. `None` for non-mail hits and hits
+    /// whose source did not populate it. Used by the email preview
+    /// plugin to render a header grid for gloda hits which cannot
+    /// be read back from disk (gloda messages live inside an mbox
+    /// shard, not as individual files on a path the plugin can
+    /// `fs::read`).
+    #[serde(default)]
+    pub sender: Option<String>,
+    /// Email `To`/`Cc`/`Bcc` joined. Same rationale as `sender`.
+    #[serde(default)]
+    pub recipients: Option<String>,
+    /// Stored body snippet — currently only populated for gloda
+    /// mail hits where it's the only way the email preview plugin
+    /// can show message content (see `sender` note). Capped by the
+    /// source; do not assume the full message.
+    #[serde(default)]
+    pub body: Option<String>,
 }
 
 /// Inline calculator result (for Spotlight-style "2+2 = 4" display).

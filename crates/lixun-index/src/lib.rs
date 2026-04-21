@@ -23,7 +23,7 @@ pub use tantivy::{IndexWriter as TantivyIndexWriter, TantivyDocument as TantivyD
 
 use lixun_core::{Category, Document, Hit, PluginFieldSpec, PluginFieldType, PluginValue, Query};
 
-const INDEX_VERSION: u32 = 5;
+const INDEX_VERSION: u32 = 6;
 const INDEX_VERSION_FILE: &str = "index_version.txt";
 
 /// Tantivy schema fields.
@@ -77,7 +77,7 @@ impl LixunSchema {
         let subtitle = builder.add_text_field("subtitle", STORED);
         let icon_name = builder.add_text_field("icon_name", STORED);
         let kind_label = builder.add_text_field("kind_label", STORED);
-        let body = builder.add_text_field("body", indexed_spotlight_text());
+        let body = builder.add_text_field("body", stored_spotlight_text());
         let path = builder.add_text_field("path", stored_spotlight_text());
         let mtime = builder.add_i64_field("mtime", STORED);
         let size = builder.add_u64_field("size", STORED);
@@ -329,6 +329,10 @@ impl LixunIndex {
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false);
 
+            let sender = stored_optional_text(&doc, s.sender);
+            let recipients = stored_optional_text(&doc, s.recipients);
+            let body = stored_optional_text(&doc, s.body);
+
             results.push(Hit {
                 id: lixun_core::DocId(id),
                 category,
@@ -339,6 +343,9 @@ impl LixunIndex {
                 score: score * category.ranking_boost(),
                 action,
                 extract_fail,
+                sender,
+                recipients,
+                body,
             });
         }
 

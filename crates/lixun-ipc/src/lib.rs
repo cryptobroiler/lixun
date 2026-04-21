@@ -396,6 +396,9 @@ mod tests {
                 path: "/tmp/demo.txt".into(),
             },
             extract_fail: false,
+            sender: None,
+            recipients: None,
+            body: None,
         }
     }
 
