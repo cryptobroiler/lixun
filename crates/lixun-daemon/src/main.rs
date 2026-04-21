@@ -26,6 +26,7 @@ use lixun_daemon::gui_control::GuiControl;
 use lixun_daemon::hotkeys;
 use lixun_daemon::index_service::{self, IndexMutationTx, SearchHandle};
 use lixun_daemon::indexer;
+use lixun_daemon::preview_spawn::PreviewSpawner;
 
 use lixun_indexer::plugin_fs_watcher;
 use lixun_indexer::watcher;
@@ -127,6 +128,7 @@ async fn main() -> Result<()> {
     let query_log = Arc::new(RwLock::new(query_log));
 
     let gui_control = Arc::new(GuiControl::new());
+    let preview_spawner = Arc::new(PreviewSpawner::new());
 
     let global_toggle_rx = hotkeys::spawn_global_toggle_listener(
         shared_config.keybindings.global_toggle.clone(),
@@ -265,11 +267,12 @@ async fn main() -> Result<()> {
                 let query_log = Arc::clone(&query_log);
                 let stats = Arc::clone(&stats);
                 let gui_control = Arc::clone(&gui_control);
+                let preview_spawner = Arc::clone(&preview_spawner);
                 let shared_config = Arc::clone(&shared_config);
                 let client_registry = Arc::clone(&registry);
 
                 tokio::spawn(async move {
-                    if let Err(e) = handle_client(stream, search, mutation_tx, history, query_log, stats, gui_control, shared_config, client_registry).await {
+                    if let Err(e) = handle_client(stream, search, mutation_tx, history, query_log, stats, gui_control, preview_spawner, shared_config, client_registry).await {
                         tracing::debug!("Client error: {}", e);
                     }
                 });
@@ -404,6 +407,7 @@ async fn handle_client(
     query_log: Arc<RwLock<QueryLog>>,
     stats: Arc<RwLock<IndexStats>>,
     gui_control: Arc<GuiControl>,
+    preview_spawner: Arc<PreviewSpawner>,
     config: Arc<config::Config>,
     registry: Arc<lixun_indexer::SourceRegistry>,
 ) -> anyhow::Result<()> {
@@ -550,9 +554,13 @@ async fn handle_client(
             let log = query_log.read().await;
             Response::Queries(log.recent(limit as usize))
         }
-        Request::Preview { hit: _ } => {
-            Response::Error("preview dispatch not yet implemented (G2.8 commit 5)".into())
-        }
+        Request::Preview { hit } => match preview_spawner.dispatch(*hit).await {
+            Ok(()) => Response::Ok,
+            Err(e) => {
+                tracing::error!("preview_spawn: dispatch failed: {}", e);
+                Response::Error(format!("preview dispatch failed: {}", e))
+            }
+        },
     };
 
     let json = serde_json::to_vec(&resp)?;
