@@ -186,6 +186,16 @@ impl LauncherController {
         }
     }
 
+    /// Drop only the cached session snapshot without touching the
+    /// live UI state. Called by `GuiCommand::ClearSession` from the
+    /// daemon after a preview process exits with the "launched"
+    /// sentinel — the launcher is already hidden (persist_session
+    /// fired during the Space → preview handoff), and we only need
+    /// to invalidate the cache so the next show opens blank.
+    pub(crate) fn drop_cached_session(&self) {
+        self.cached_session.borrow_mut().take();
+    }
+
     /// Reset every piece of session state so the next show is clean.
     /// Called by launch-completing actions via `clear_and_hide`,
     /// and on explicit cache invalidation. Bumps `session_epoch`

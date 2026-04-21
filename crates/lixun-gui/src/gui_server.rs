@@ -107,6 +107,12 @@ fn dispatch(controller: &LauncherController, cmd: GuiCommand) -> GuiResponse {
             controller.quit();
             GuiResponse::Ok { visible: false }
         }
+        GuiCommand::ClearSession => {
+            controller.drop_cached_session();
+            GuiResponse::Ok {
+                visible: controller.is_visible(),
+            }
+        }
     }
 }
 
