@@ -9,9 +9,9 @@ use gtk::prelude::*;
 use lixun_core::Action;
 use lixun_daemon::config::Keybindings;
 
-use crate::actions::{copy_to_clipboard, execute_action, execute_secondary_action, quick_look};
+use crate::actions::{copy_to_clipboard, execute_action, execute_secondary_action};
 use crate::factory::{synthetic_history_hits, update_results, with_cached_hits};
-use crate::ipc::{IpcClient, request_search_history, send_record_click};
+use crate::ipc::{IpcClient, request_search_history, send_preview_request, send_record_click};
 use crate::status::StatusBar;
 use crate::window::{CategoryChips, LauncherController};
 
@@ -235,13 +235,9 @@ pub(crate) fn install_keyboard_handler(
                     selected_hit_in(&selection, &filter_model, copy_to_clipboard);
                     glib::signal::Propagation::Stop
             } else if accel_matches(&keybindings.quick_look, key, state) && !entry_has_focus(&entry, &window) {
-                    // Only trigger quick_look when focus is NOT in entry (i.e. list is focused)
-                    // This allows space to be typed in the entry
-                    selected_hit_in(&selection, &filter_model, |hit| {
-                        if let Err(e) = quick_look(hit) {
-                            tracing::error!("Quick Look failed: {}", e);
-                        }
-                    });
+                    // Only trigger when focus is NOT in entry (i.e. list is focused)
+                    // so space can still be typed into the search field.
+                    selected_hit_in(&selection, &filter_model, send_preview_request);
                     glib::signal::Propagation::Stop
             } else if accel_matches(&keybindings.filter_all, key, state) {
                     chips.activate_index(0);

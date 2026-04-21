@@ -215,3 +215,23 @@ pub(crate) fn send_record_click(doc_id: &str) {
         let _ = stream.write_all(&buf);
     }
 }
+
+pub(crate) fn send_preview_request(hit: &Hit) {
+    let sock = socket_path();
+    let req = Request::Preview {
+        hit: Box::new(hit.clone()),
+    };
+    let Ok(json) = serde_json::to_vec(&req) else {
+        return;
+    };
+    let total_len = (2 + json.len()) as u32;
+    let mut buf = Vec::with_capacity(4 + 2 + json.len());
+    buf.extend_from_slice(&total_len.to_be_bytes());
+    buf.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
+    buf.extend_from_slice(&json);
+
+    tracing::info!("gui: send_preview_request hit_id={}", hit.id.0);
+    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&sock) {
+        let _ = stream.write_all(&buf);
+    }
+}

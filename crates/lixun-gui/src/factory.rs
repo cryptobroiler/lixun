@@ -7,8 +7,9 @@ use gtk::gio;
 use gtk::prelude::*;
 use lixun_core::{Action, Category, Hit};
 
-use crate::actions::{copy_to_clipboard, execute_action, execute_secondary_action, quick_look};
+use crate::actions::{copy_to_clipboard, execute_action, execute_secondary_action};
 use crate::icons::resolve_icon;
+use crate::ipc::send_preview_request;
 use crate::ipc::send_record_click;
 
 pub(crate) const ICON_SIZE_NORMAL: i32 = 32;
@@ -133,9 +134,7 @@ fn install_action_group(row: &gtk::Box, hit: &Hit) {
     let quick_hit = hit.clone();
     let quick = gio::SimpleAction::new("quicklook", None);
     quick.connect_activate(move |_, _| {
-        if let Err(e) = quick_look(&quick_hit) {
-            tracing::error!("Quick look failed: {}", e);
-        }
+        send_preview_request(&quick_hit);
     });
     group.add_action(&quick);
 
