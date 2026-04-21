@@ -90,6 +90,11 @@ pub(crate) struct LauncherController {
     /// on any launch action.
     cached_session: std::rc::Rc<std::cell::RefCell<Option<SessionSnapshot>>>,
     ipc: IpcClient,
+    /// Latch set by `restore_session` so the entry's
+    /// connect_changed handler can short-circuit its debounced
+    /// search. Critical for selection preservation — see
+    /// `restore_session` docstring.
+    is_restoring: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl LauncherController {
@@ -280,12 +285,26 @@ impl LauncherController {
     /// displayed rows catch up with any index updates that
     /// happened while the launcher was hidden.
     ///
-    /// Restoration order matters: chips first (so the filter is
-    /// active when rows populate), then entry text (which fires
-    /// connect_changed and would normally trigger a new search —
-    /// we suppress that by setting `last_query` to the cached
-    /// query before signalling), then model + selection.
+    /// Two non-obvious gotchas:
+    ///
+    /// - `is_restoring` latch neutralises the entry's
+    ///   connect_changed handler while we call `entry.set_text`.
+    ///   Without it the handler schedules a duplicate debounced
+    ///   search that races our silent refresh; whichever reply
+    ///   wins hits the response poller, which then recomputes
+    ///   the cursor from its own `prior_selected` snapshot and
+    ///   can land on the wrong row.
+    ///
+    /// - `filter.changed` must be called AFTER `update_results`,
+    ///   not only before. FilterListModel does not recompute
+    ///   `n_items` eagerly on child-model append; without the
+    ///   second invalidation the DocId lookup below sees an empty
+    ///   filtered view and falls back to index 0 — which is the
+    ///   exact bug report ("selection always 1st row") this
+    ///   method exists to fix.
     fn restore_session(&self, snapshot: &SessionSnapshot) {
+        self.is_restoring.set(true);
+
         self.chips.activate_index(snapshot.chip_index);
         self.current_category.set(snapshot.category);
         self.filter.changed(gtk::FilterChange::Different);
@@ -293,6 +312,7 @@ impl LauncherController {
         *self.last_query.borrow_mut() = snapshot.query.clone();
 
         update_results(&self.model, &snapshot.hits);
+        self.filter.changed(gtk::FilterChange::Different);
 
         let selected_idx = snapshot
             .selected_doc_id
@@ -317,17 +337,16 @@ impl LauncherController {
             self.scrolled.set_vexpand(true);
         }
 
-        // Restore entry text last, with a guard to avoid firing a
-        // user-facing debounced search (last_query already equals
-        // query above, but connect_changed fires unconditionally).
-        // We also schedule a silent background refresh using the
-        // current session_epoch so stale results don't overwrite
-        // a query the user may have typed in the interim.
         self.entry.set_text(&snapshot.query);
         self.entry.set_position(-1);
 
         let epoch = self.session_epoch.load(Ordering::SeqCst);
-        let _ = self.ipc.request_tx.send((snapshot.query.clone(), 30, epoch));
+        let _ = self
+            .ipc
+            .request_tx
+            .send((snapshot.query.clone(), 30, epoch));
+
+        self.is_restoring.set(false);
     }
 
     fn recompute_monitor(&self) {
@@ -484,6 +503,8 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
 
     let cached_session: std::rc::Rc<std::cell::RefCell<Option<SessionSnapshot>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
+    let is_restoring: std::rc::Rc<std::cell::Cell<bool>> =
+        std::rc::Rc::new(std::cell::Cell::new(false));
 
     let controller = std::rc::Rc::new(LauncherController {
         window: window.clone(),
@@ -501,6 +522,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         filter: filter.clone(),
         cached_session: std::rc::Rc::clone(&cached_session),
         ipc: ipc.clone(),
+        is_restoring: std::rc::Rc::clone(&is_restoring),
     });
 
     let close_action = gio::SimpleAction::new("close-launcher", None);
@@ -539,6 +561,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         std::rc::Rc::clone(&last_query),
         std::rc::Rc::clone(&pending_debounce),
         Arc::clone(&session_epoch),
+        std::rc::Rc::clone(&is_restoring),
     );
 
     crate::keymap::install_keyboard_handler(
@@ -679,8 +702,12 @@ fn install_entry_handler(
     last_query: std::rc::Rc<std::cell::RefCell<String>>,
     pending_debounce: std::rc::Rc<std::cell::RefCell<Option<glib::SourceId>>>,
     session_epoch: Arc<AtomicU64>,
+    is_restoring: std::rc::Rc<std::cell::Cell<bool>>,
 ) {
     entry.connect_changed(move |e| {
+        if is_restoring.get() {
+            return;
+        }
         let text = e.text().to_string();
 
         if let Some(id) = pending_debounce.borrow_mut().take() {
