@@ -20,7 +20,7 @@ use gtk::gio::ApplicationFlags;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use lixun_core::Hit;
+use lixun_core::{Action, Hit};
 use lixun_preview::{PreviewPluginCfg, install_user_css, select_plugin};
 
 use lixun_preview_bundle as _;
@@ -148,7 +148,7 @@ fn build_preview_window(
     install_user_css(&display);
 
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let header = build_header(hit, plugin_id);
+    let header = build_header(hit, plugin_id, app);
     vbox.append(&header);
 
     let content_scroll = gtk::ScrolledWindow::new();
@@ -176,7 +176,7 @@ fn build_preview_window(
     vbox.append(&content_scroll);
     window.set_child(Some(&vbox));
 
-    install_close_controllers(&window, app);
+    install_close_controllers(&window, app, openable_path(&hit.action));
 
     window.present();
     tracing::info!(
@@ -187,7 +187,7 @@ fn build_preview_window(
     Ok(())
 }
 
-fn build_header(hit: &Hit, plugin_id: &str) -> gtk::Box {
+fn build_header(hit: &Hit, plugin_id: &str, app: &gtk::Application) -> gtk::Box {
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     header.set_widget_name("lixun-preview-header");
     header.set_margin_top(12);
@@ -214,11 +214,54 @@ fn build_header(hit: &Hit, plugin_id: &str) -> gtk::Box {
 
     header.append(&text);
 
+    if let Some(path) = openable_path(&hit.action) {
+        let open_btn = gtk::Button::from_icon_name("document-open-symbolic");
+        open_btn.set_tooltip_text(Some("Open (Enter)"));
+        open_btn.set_widget_name("lixun-preview-open-btn");
+        open_btn.add_css_class("flat");
+        let path_for_click = path.clone();
+        let app_for_click = app.clone();
+        open_btn.connect_clicked(move |_| {
+            launch_default_and_quit(&path_for_click, &app_for_click);
+        });
+        header.append(&open_btn);
+    }
+
     let plugin_badge = gtk::Label::new(Some(plugin_id));
     plugin_badge.set_widget_name("lixun-preview-plugin-badge");
     header.append(&plugin_badge);
 
     header
+}
+
+fn openable_path(action: &Action) -> Option<PathBuf> {
+    match action {
+        Action::OpenFile { path } | Action::ShowInFileManager { path } => Some(path.clone()),
+        _ => None,
+    }
+}
+
+fn launch_default_and_quit(path: &std::path::Path, app: &gtk::Application) {
+    let uri = match gtk::gio::File::for_path(path).uri() {
+        uri if !uri.is_empty() => uri,
+        _ => {
+            tracing::warn!("preview: cannot form URI from path {:?}", path);
+            return;
+        }
+    };
+    match gtk::gio::AppInfo::launch_default_for_uri(&uri, gtk::gio::AppLaunchContext::NONE) {
+        Ok(()) => {
+            tracing::info!("preview: launched default handler for {:?}", path);
+            app.quit();
+        }
+        Err(e) => {
+            tracing::error!(
+                "preview: launch_default_for_uri failed for {:?}: {} — window stays open",
+                path,
+                e
+            );
+        }
+    }
 }
 
 /// Resolve which monitor the preview window should open on.
@@ -269,7 +312,11 @@ fn pick_monitor(display: &gtk::gdk::Display) -> Option<gtk::gdk::Monitor> {
     display.monitors().item(0).and_then(|m| m.downcast().ok())
 }
 
-fn install_close_controllers(window: &gtk::ApplicationWindow, app: &gtk::Application) {
+fn install_close_controllers(
+    window: &gtk::ApplicationWindow,
+    app: &gtk::Application,
+    openable: Option<PathBuf>,
+) {
     let showed_at = Rc::new(RefCell::new(Instant::now()));
 
     {
@@ -282,13 +329,23 @@ fn install_close_controllers(window: &gtk::ApplicationWindow, app: &gtk::Applica
     let key = gtk::EventControllerKey::new();
     {
         let app = app.clone();
+        let openable = openable.clone();
         key.connect_key_pressed(move |_, keyval, _keycode, _state| {
             let sym = keyval.name().map(|g| g.to_string()).unwrap_or_default();
-            if sym == "Escape" || sym == "space" {
-                app.quit();
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
+            match sym.as_str() {
+                "Escape" | "space" => {
+                    app.quit();
+                    glib::Propagation::Stop
+                }
+                "Return" | "KP_Enter" => {
+                    if let Some(path) = openable.as_deref() {
+                        launch_default_and_quit(path, &app);
+                    } else {
+                        app.quit();
+                    }
+                    glib::Propagation::Stop
+                }
+                _ => glib::Propagation::Proceed,
             }
         });
     }
