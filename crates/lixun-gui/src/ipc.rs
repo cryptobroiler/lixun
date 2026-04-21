@@ -1,5 +1,11 @@
 //! IPC client: background thread sending search requests and a fire-and-forget
 //! record-click helper.
+//!
+//! Service-mode session epoch (G1.6): each request carries the session
+//! epoch at send-time. The response thread compares that snapshot to the
+//! current epoch before committing results; hides bump the epoch via
+//! `LauncherController::reset_session` so stale replies land in a new
+//! session and are discarded.
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,7 +15,7 @@ use lixun_core::{Calculation, Hit};
 use lixun_ipc::{socket_path, Request, Response, PROTOCOL_VERSION};
 
 pub(crate) struct IpcClient {
-    pub(crate) request_tx: mpsc::Sender<(String, u32)>,
+    pub(crate) request_tx: mpsc::Sender<(String, u32, u64)>,
     pub(crate) responses: Arc<Mutex<Vec<Hit>>>,
     pub(crate) calculation: Arc<Mutex<Option<Calculation>>>,
     pub(crate) response_epoch: Arc<AtomicU64>,
@@ -26,8 +32,8 @@ impl Clone for IpcClient {
     }
 }
 
-pub(crate) fn start_ipc_thread() -> IpcClient {
-    let (tx, rx) = mpsc::channel::<(String, u32)>();
+pub(crate) fn start_ipc_thread(session_epoch: Arc<AtomicU64>) -> IpcClient {
+    let (tx, rx) = mpsc::channel::<(String, u32, u64)>();
     let responses: Arc<Mutex<Vec<Hit>>> = Arc::new(Mutex::new(Vec::new()));
     let calculation: Arc<Mutex<Option<Calculation>>> = Arc::new(Mutex::new(None));
     let response_epoch: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
@@ -36,7 +42,7 @@ pub(crate) fn start_ipc_thread() -> IpcClient {
     let epoch_clone = Arc::clone(&response_epoch);
 
     std::thread::spawn(move || {
-        while let Ok((query, limit)) = rx.recv() {
+        while let Ok((query, limit, epoch_at_send)) = rx.recv() {
             let sock = socket_path();
             let req = Request::Search { q: query, limit };
             let json = match serde_json::to_vec(&req) {
@@ -83,6 +89,14 @@ pub(crate) fn start_ipc_thread() -> IpcClient {
             let mut resp_buf = vec![0u8; resp_len - 2];
             if let Err(e) = stream.read_exact(&mut resp_buf) {
                 tracing::error!("Failed to read response body: {}", e);
+                continue;
+            }
+
+            if epoch_at_send != session_epoch.load(Ordering::SeqCst) {
+                tracing::debug!(
+                    "ipc: dropping reply from stale session (sent in epoch {})",
+                    epoch_at_send
+                );
                 continue;
             }
 

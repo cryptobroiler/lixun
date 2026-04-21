@@ -6,21 +6,14 @@
 
 use glib::clone;
 use gtk::prelude::*;
-use lixun_daemon::config::Keybindings;
 use lixun_core::Action;
+use lixun_daemon::config::Keybindings;
 
 use crate::actions::{copy_to_clipboard, execute_action, execute_secondary_action, quick_look};
 use crate::factory::{synthetic_history_hits, update_results, with_cached_hits};
-use crate::ipc::{request_search_history, send_record_click, IpcClient};
+use crate::ipc::{IpcClient, request_search_history, send_record_click};
 use crate::status::StatusBar;
-use crate::window::CategoryChips;
-
-fn close_launcher(window: &gtk::ApplicationWindow) {
-    window.close();
-    if let Some(app) = window.application() {
-        app.quit();
-    }
-}
+use crate::window::{CategoryChips, LauncherController};
 
 fn selected_hit_in<F: FnOnce(&lixun_core::Hit)>(
     selection: &gtk::SingleSelection,
@@ -131,6 +124,7 @@ pub(crate) fn install_keyboard_handler(
     status_bar: std::rc::Rc<StatusBar>,
     _ipc: IpcClient,
     keybindings: Keybindings,
+    controller: std::rc::Rc<LauncherController>,
 ) {
     // Main key controller attached to window with Capture phase
     // This ensures all key handling works regardless of focus state
@@ -144,6 +138,7 @@ pub(crate) fn install_keyboard_handler(
         #[strong] entry,
         #[strong] chips,
         #[strong] keybindings,
+        #[strong] controller,
         move |_, key, _keycode, state| {
             // Hard rule: printable unmodified keys belong to the focused
             // Entry. Forward them before any accel dispatch can swallow
@@ -208,7 +203,7 @@ pub(crate) fn install_keyboard_handler(
                     }
                     glib::signal::Propagation::Stop
             } else if accel_matches(&keybindings.close, key, state) {
-                    close_launcher(&window);
+                    controller.hide();
                     glib::signal::Propagation::Stop
             } else if accel_matches(&keybindings.primary_action, key, state)
                 || accel_matches(&keybindings.secondary_action, key, state)
@@ -233,7 +228,7 @@ pub(crate) fn install_keyboard_handler(
                         }
                     });
                     if should_hide {
-                        close_launcher(&window);
+                        controller.hide();
                     }
                     glib::signal::Propagation::Stop
             } else if accel_matches(&keybindings.copy, key, state) {

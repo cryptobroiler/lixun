@@ -9,6 +9,7 @@ use gtk::prelude::*;
 mod actions;
 mod attachments;
 mod factory;
+mod gui_server;
 mod icons;
 mod ipc;
 mod keymap;
