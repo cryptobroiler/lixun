@@ -44,15 +44,34 @@ pub(crate) fn clear_cached_hits() {
     CACHED_HITS.with(|c| c.borrow_mut().clear());
 }
 
+/// Replace every row in `model` with rows derived from `hits`, using
+/// `StringList::splice` so the underlying list emits exactly ONE
+/// items-changed signal for the whole churn instead of one per row.
+///
+/// The suppression of intermediate items-changed emissions matters
+/// because GTK4's `SingleSelection::autoselect` property re-runs its
+/// interpolation formula on every items-changed (see
+/// gtksingleselection.c:210-296). A naive `remove(0)` loop plus a
+/// second `append` loop therefore fires up to 2*N emissions, and
+/// autoselect's fallback branch — which lands on `position - 1` when
+/// the computed new index is out of bounds — can leave the cursor
+/// on whatever row happened to be the final valid interpolation
+/// target. That manifested to the user as "selection always jumps
+/// to the end of the list" after the search query was cleared and
+/// retyped. Splice collapses the whole operation into one atomic
+/// items-changed, so autoselect runs exactly once against the final
+/// state.
+///
+/// Callers are responsible for setting the desired selection index
+/// AFTER this function returns; we deliberately do not touch the
+/// selection here because different call sites want different
+/// post-conditions (row 0 for fresh results, INVALID_LIST_POSITION
+/// for empty state, a DocId-matched index for session restore).
 pub(crate) fn update_results(model: &gtk::StringList, hits: &[Hit]) {
     let n = model.n_items();
-    for _ in 0..n {
-        model.remove(0);
-    }
+    let additions: Vec<&str> = hits.iter().map(|h| h.id.0.as_str()).collect();
+    model.splice(0, n, &additions);
     cache_hits(hits.to_vec());
-    for hit in hits {
-        model.append(&hit.id.0);
-    }
 }
 
 pub(crate) fn synthetic_history_hits(queries: &[String]) -> Vec<Hit> {
