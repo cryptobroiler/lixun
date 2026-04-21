@@ -853,6 +853,40 @@ fn install_entry_handler(
         }
 
         if text.is_empty() {
+            // Bump the session epoch so any in-flight IPC reply
+            // for the just-erased query lands in a stale epoch
+            // and gets dropped by the response poller. Without
+            // this, two regressions reappear the moment the
+            // user clears the query via Backspace:
+            //
+            //   * stale hits from the previous non-empty query
+            //     arrive after the clear, the poller runs the
+            //     `hits_snapshot.is_empty()` check against the
+            //     new empty state, falls through to the else-
+            //     branch, and repopulates the list with random-
+            //     looking rows (they are the old query's hits).
+            //   * last_query still carries the prior text, so
+            //     the poller's `q.is_empty()` check goes false
+            //     and it pops `status.show_empty("firefox")`
+            //     below the entry — that status bar is the
+            //     phantom bottom margin that grew after each
+            //     clear cycle.
+            //
+            // Clearing last_query + bumping epoch + dropping
+            // the cached hits is exactly the subset of
+            // scrub_ui() that matters here; the rest (entry,
+            // chips, categories) we deliberately do NOT touch:
+            // the user controls the entry via Backspace itself,
+            // and the category filter staying on the user's
+            // last choice across clears matches the current UX
+            // contract for this bug fix.
+            session_epoch.fetch_add(1, Ordering::SeqCst);
+            if let Some(id) = pending_debounce.borrow_mut().take() {
+                id.remove();
+            }
+            last_query.borrow_mut().clear();
+            clear_cached_hits();
+
             // Disable autoselect around the bulk clear so
             // SingleSelection's interpolation formula
             // (gtksingleselection.c:253-296) does not drift the
