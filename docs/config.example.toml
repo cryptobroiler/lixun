@@ -280,6 +280,11 @@ global_toggle = "Super+space"
 # width_percent = 40
 # height_percent = 60
 
+# Preview window percentages (separate from launcher — preview shows
+# full documents and media, so 80/80 is a sensible default).
+# preview_width_percent = 80
+# preview_height_percent = 80
+
 # ============================================================
 # Preview subsystem
 # ============================================================
