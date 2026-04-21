@@ -169,18 +169,23 @@ impl PreviewSpawner {
                     s.pid = None;
                 }
             }
-            if !launched {
-                match gui_control.dispatch(GuiCommand::Show).await {
-                    Ok(_) => tracing::debug!(
-                        "preview_spawn: re-shown launcher after preview pid={} closed",
-                        pid
-                    ),
-                    Err(e) => tracing::warn!(
-                        "preview_spawn: failed to re-show launcher after preview pid={}: {}",
-                        pid,
-                        e
-                    ),
-                }
+            let post_cmd = if launched {
+                GuiCommand::ClearSession
+            } else {
+                GuiCommand::Show
+            };
+            match gui_control.dispatch(post_cmd).await {
+                Ok(_) => tracing::debug!(
+                    "preview_spawn: dispatched {:?} to launcher after preview pid={} exit",
+                    post_cmd,
+                    pid
+                ),
+                Err(e) => tracing::warn!(
+                    "preview_spawn: failed to dispatch {:?} after preview pid={}: {}",
+                    post_cmd,
+                    pid,
+                    e
+                ),
             }
         });
 

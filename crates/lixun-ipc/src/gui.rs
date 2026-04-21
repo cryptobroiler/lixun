@@ -31,6 +31,15 @@ pub enum GuiCommand {
     Quit,
     /// Health probe. Reply carries current visibility.
     Ping,
+    /// Drop the persisted session cache without changing visibility.
+    /// Sent by the daemon after a preview process exits with the
+    /// "launched" sentinel (preview opened the file in its default
+    /// app), so that the next Super+Space shows a blank launcher
+    /// rather than restoring the pre-launch query/results/selection.
+    /// The launcher is already hidden by this point (persist_session
+    /// fired during the Space → preview handoff), so this command
+    /// does not flip visibility.
+    ClearSession,
 }
 
 /// Response from the GUI to a `GuiCommand`.
@@ -206,6 +215,14 @@ mod tests {
     #[test]
     fn roundtrip_ping() {
         assert_eq!(roundtrip_cmd(GuiCommand::Ping), GuiCommand::Ping);
+    }
+
+    #[test]
+    fn roundtrip_clear_session() {
+        assert_eq!(
+            roundtrip_cmd(GuiCommand::ClearSession),
+            GuiCommand::ClearSession
+        );
     }
 
     #[test]
