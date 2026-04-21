@@ -1,4 +1,5 @@
 pub mod config;
+pub mod gui_control;
 pub mod hotkeys;
 pub mod session_env;
 
