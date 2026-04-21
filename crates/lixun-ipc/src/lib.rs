@@ -12,6 +12,8 @@ use tokio_util::codec::{Decoder, Encoder};
 
 use lixun_core::Hit;
 
+pub mod gui;
+
 pub const PROTOCOL_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -169,7 +171,7 @@ impl Decoder for FrameCodec {
 
 /// Determine the socket path.
 pub fn socket_path() -> PathBuf {
-    let uid = get_uid();
+    let uid = get_uid_fallback();
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         let path = PathBuf::from(runtime_dir).join("lixun.sock");
         return path;
@@ -177,7 +179,7 @@ pub fn socket_path() -> PathBuf {
     PathBuf::from(format!("/tmp/lixun-{}.sock", uid))
 }
 
-fn get_uid() -> u32 {
+pub(crate) fn get_uid_fallback() -> u32 {
     if let Ok(uid) = std::env::var("UID")
         && let Ok(uid) = uid.parse::<u32>()
     {
