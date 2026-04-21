@@ -25,6 +25,34 @@ use crate::status::StatusBar;
 
 pub(crate) type CategoryFilter = std::rc::Rc<std::cell::Cell<Option<Category>>>;
 
+/// Frozen snapshot of a user search session, captured on hide and
+/// restored on show. Mirrors Spotlight's UX: if the user dismisses
+/// the launcher without launching anything (Escape, focus-loss,
+/// toggle-off, preview), their query, results, and cursor position
+/// survive so the next show picks up exactly where they left off.
+///
+/// Only a launch action (Enter, double-click, calculator copy)
+/// clears this cache — everything else keeps it. A silent
+/// background re-search is issued on restore so the displayed rows
+/// reflect any fs-watcher or gloda updates that happened while the
+/// launcher was hidden.
+#[derive(Clone)]
+pub(crate) struct SessionSnapshot {
+    pub(crate) query: String,
+    pub(crate) hits: Vec<lixun_core::Hit>,
+    /// DocId of the selected hit at hide time. Restored by DocId
+    /// rather than by index because the silent refresh may reorder
+    /// the list; matching on identity keeps the cursor on the same
+    /// logical item (or falls back to index 0 if it's gone).
+    pub(crate) selected_doc_id: Option<String>,
+    /// Which category chip was active. `None` = "All".
+    pub(crate) category: Option<Category>,
+    /// Which chip button index was active (0..4). Saved separately
+    /// from `category` because chip 0 is All (category=None) but
+    /// distinct from a future explicit "uncategorized" filter.
+    pub(crate) chip_index: usize,
+}
+
 const EMBEDDED_STYLESHEET: &str = include_str!("../style.css");
 
 pub(crate) const DEFAULT_TOP_MARGIN: i32 = 140;
@@ -38,7 +66,7 @@ const JUST_SHOWED_GUARD_MS: u64 = 150;
 
 /// Lives for the whole GUI process lifetime. Owns every widget the
 /// service-mode command handlers (`show`, `hide`, `toggle`, `quit`,
-/// `reset_session`) need to mutate, plus the `session_epoch` that the
+/// `clear_session`) need to mutate, plus the `session_epoch` that the
 /// IPC thread checks before committing search replies. All methods
 /// assume they are called on the GTK main thread; the `gui_server`
 /// module funnels commands here via `glib::spawn_future_local`.
@@ -56,6 +84,12 @@ pub(crate) struct LauncherController {
     session_epoch: Arc<AtomicU64>,
     just_showed_until: std::rc::Rc<std::cell::Cell<Instant>>,
     filter: gtk::CustomFilter,
+    /// Snapshot of the last dismissed-but-not-launched session.
+    /// Populated by `persist_session` on soft hide, consumed by
+    /// `restore_session` on next show, emptied by `clear_session`
+    /// on any launch action.
+    cached_session: std::rc::Rc<std::cell::RefCell<Option<SessionSnapshot>>>,
+    ipc: IpcClient,
 }
 
 impl LauncherController {
@@ -66,12 +100,25 @@ impl LauncherController {
     /// Make the window visible. Returns the resulting visibility
     /// (`true` on success). Recomputes the monitor so re-shows track
     /// the pointer across multi-monitor setups.
+    ///
+    /// If a session snapshot was cached by the previous soft-hide,
+    /// restore it before presenting: the user sees their prior
+    /// query, results, and selection immediately (no flash of empty
+    /// launcher), with a silent background refresh catching the
+    /// results up to any index changes that happened in between.
     pub(crate) fn show(&self) -> bool {
         self.recompute_monitor();
+
+        let snapshot = self.cached_session.borrow_mut().take();
+        if let Some(snapshot) = snapshot {
+            self.restore_session(&snapshot);
+        }
+
         self.window.remove_css_class("lixun-hiding");
         self.window.add_css_class("lixun-showing");
         self.window.set_visible(true);
         self.entry.grab_focus();
+        self.entry.set_position(-1);
         self.just_showed_until
             .set(Instant::now() + Duration::from_millis(JUST_SHOWED_GUARD_MS));
 
@@ -84,11 +131,29 @@ impl LauncherController {
         true
     }
 
-    /// Make the window invisible and reset transient UI state so the
-    /// next `show()` starts fresh. Returns the resulting visibility
-    /// (always `false`). Does NOT exit the process; only `quit()` does.
+    /// Soft-hide: make the window invisible but keep the current
+    /// session (query + results + selection) in `cached_session` so
+    /// the next `show()` restores it. This is the Spotlight-style
+    /// default for every dismiss that is NOT a launch action
+    /// (Escape, focus-loss, toggle-off, preview-open, preview-close).
+    /// Does NOT exit the process; only `quit()` does.
     pub(crate) fn hide(&self) -> bool {
-        self.reset_session();
+        self.persist_session();
+        self.animate_hide();
+        false
+    }
+
+    /// Hard-hide: clear the session completely, then hide. Used by
+    /// every launch-completing action (Enter, primary/secondary,
+    /// double-click, calculator copy) where the user has finished
+    /// the task and expects a fresh launcher next time.
+    pub(crate) fn clear_and_hide(&self) -> bool {
+        self.clear_session();
+        self.animate_hide();
+        false
+    }
+
+    fn animate_hide(&self) {
         self.window.remove_css_class("lixun-showing");
         self.window.add_css_class("lixun-hiding");
 
@@ -99,7 +164,6 @@ impl LauncherController {
                 w.remove_css_class("lixun-hiding");
             }
         });
-        false
     }
 
     /// Flip visibility. Single source of truth for service-mode toggle:
@@ -123,10 +187,15 @@ impl LauncherController {
     }
 
     /// Reset every piece of session state so the next show is clean.
-    /// Bumps `session_epoch` first so any in-flight search replies
-    /// land in a new epoch and get discarded by the IPC poller.
-    fn reset_session(&self) {
+    /// Called by launch-completing actions via `clear_and_hide`,
+    /// and on explicit cache invalidation. Bumps `session_epoch`
+    /// first so any in-flight search replies land in a new epoch
+    /// and get discarded by the IPC poller. Drops the cached
+    /// session snapshot — after this, the next show is a blank
+    /// launcher.
+    pub(crate) fn clear_session(&self) {
         self.session_epoch.fetch_add(1, Ordering::SeqCst);
+        self.cached_session.borrow_mut().take();
 
         if let Some(id) = self.pending_debounce.borrow_mut().take() {
             id.remove();
@@ -150,6 +219,105 @@ impl LauncherController {
         self.status.hide();
 
         self.last_query.borrow_mut().clear();
+    }
+
+    /// Capture the current session into `cached_session` and then
+    /// quiesce in-flight IPC + debounce without touching the UI
+    /// state (entry text, model items, selection remain intact in
+    /// case of abort — though nothing currently aborts a hide).
+    /// The UI itself gets hidden by `animate_hide`; this method
+    /// only deals with state management.
+    ///
+    /// Called by soft-hide paths: Escape, focus-loss, toggle-off,
+    /// preview invocation. If the current query is empty there is
+    /// no session worth saving — clear the cache instead, so a
+    /// "blank launcher → Escape → Super+Space" cycle doesn't
+    /// restore a ghost of some previous non-empty session.
+    fn persist_session(&self) {
+        self.session_epoch.fetch_add(1, Ordering::SeqCst);
+        if let Some(id) = self.pending_debounce.borrow_mut().take() {
+            id.remove();
+        }
+
+        let query = self.entry.text().to_string();
+        if query.is_empty() {
+            self.cached_session.borrow_mut().take();
+            return;
+        }
+
+        let selected_doc_id = {
+            let idx = self.selection.selected();
+            self.selection.item(idx).and_then(|obj| {
+                obj.downcast::<gtk::StringObject>()
+                    .ok()
+                    .map(|s| s.string().to_string())
+            })
+        };
+
+        let hits = with_cached_hits(|h| h.to_vec());
+        let snapshot = SessionSnapshot {
+            query,
+            hits,
+            selected_doc_id,
+            category: self.current_category.get(),
+            chip_index: self.chips.active_index().unwrap_or(0),
+        };
+        *self.cached_session.borrow_mut() = Some(snapshot);
+    }
+
+    /// Restore a `SessionSnapshot` captured by `persist_session`
+    /// into the UI and fire a silent background re-search so the
+    /// displayed rows catch up with any index updates that
+    /// happened while the launcher was hidden.
+    ///
+    /// Restoration order matters: chips first (so the filter is
+    /// active when rows populate), then entry text (which fires
+    /// connect_changed and would normally trigger a new search —
+    /// we suppress that by setting `last_query` to the cached
+    /// query before signalling), then model + selection.
+    fn restore_session(&self, snapshot: &SessionSnapshot) {
+        self.chips.activate_index(snapshot.chip_index);
+        self.current_category.set(snapshot.category);
+        self.filter.changed(gtk::FilterChange::Different);
+
+        *self.last_query.borrow_mut() = snapshot.query.clone();
+
+        update_results(&self.model, &snapshot.hits);
+
+        let selected_idx = snapshot
+            .selected_doc_id
+            .as_deref()
+            .and_then(|want| {
+                (0..self.selection.n_items()).find(|&i| {
+                    self.selection
+                        .item(i)
+                        .and_then(|o| o.downcast::<gtk::StringObject>().ok())
+                        .map(|s| s.string() == want)
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(0);
+        if self.selection.n_items() > 0 {
+            self.selection.set_selected(selected_idx);
+        }
+
+        self.chips.container.set_visible(true);
+        if !snapshot.hits.is_empty() {
+            self.scrolled.set_visible(true);
+            self.scrolled.set_vexpand(true);
+        }
+
+        // Restore entry text last, with a guard to avoid firing a
+        // user-facing debounced search (last_query already equals
+        // query above, but connect_changed fires unconditionally).
+        // We also schedule a silent background refresh using the
+        // current session_epoch so stale results don't overwrite
+        // a query the user may have typed in the interim.
+        self.entry.set_text(&snapshot.query);
+        self.entry.set_position(-1);
+
+        let epoch = self.session_epoch.load(Ordering::SeqCst);
+        let _ = self.ipc.request_tx.send((snapshot.query.clone(), 30, epoch));
     }
 
     fn recompute_monitor(&self) {
@@ -304,6 +472,9 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     let just_showed_until: std::rc::Rc<std::cell::Cell<Instant>> =
         std::rc::Rc::new(std::cell::Cell::new(Instant::now()));
 
+    let cached_session: std::rc::Rc<std::cell::RefCell<Option<SessionSnapshot>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+
     let controller = std::rc::Rc::new(LauncherController {
         window: window.clone(),
         entry: entry.clone(),
@@ -318,6 +489,8 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         session_epoch: Arc::clone(&session_epoch),
         just_showed_until: std::rc::Rc::clone(&just_showed_until),
         filter: filter.clone(),
+        cached_session: std::rc::Rc::clone(&cached_session),
+        ipc: ipc.clone(),
     });
 
     let close_action = gio::SimpleAction::new("close-launcher", None);
@@ -326,6 +499,13 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         controller_for_close.hide();
     });
     app.add_action(&close_action);
+
+    let clear_action = gio::SimpleAction::new("clear-and-hide-launcher", None);
+    let controller_for_clear = std::rc::Rc::clone(&controller);
+    clear_action.connect_activate(move |_, _| {
+        controller_for_clear.clear_and_hide();
+    });
+    app.add_action(&clear_action);
 
     install_response_poller(
         ipc.clone(),
@@ -529,6 +709,10 @@ impl CategoryChips {
         if let Some(btn) = self.buttons.get(index) {
             btn.set_active(true);
         }
+    }
+
+    pub(crate) fn active_index(&self) -> Option<usize> {
+        self.buttons.iter().position(|b| b.is_active())
     }
 }
 
