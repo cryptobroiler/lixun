@@ -477,13 +477,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     vbox.set_margin_start(16);
     vbox.set_margin_end(16);
     vbox.set_margin_top(12);
-    // No bottom margin on purpose. With empty query everything below
-    // the entry is set_visible(false), and an outer margin_bottom
-    // would add dead space below the entry — the "window has a
-    // bottom gutter even when there is nothing to show" visual bug.
-    // When results exist, the scrolled area carries its own
-    // padding-bottom (.lixun-results in style.css), so we do not
-    // need a compensating margin here for that case either.
+    vbox.set_margin_bottom(2);
 
     let entry = gtk::Entry::builder()
         .placeholder_text("Search\u{2026}")
