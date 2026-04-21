@@ -208,47 +208,14 @@ impl LauncherController {
     /// sentinel — the launcher is already hidden (persist_session
     /// fired during the Space → preview handoff), and we only need
     /// to invalidate the cache so the next show opens blank.
+    ///
+    /// The UI still needs scrubbing despite being invisible:
+    /// persist_session deliberately leaves entry/model/selection
+    /// populated so restore_session can flash them back instantly
+    /// on the next show. Without a scrub here, that stale state
+    /// becomes visible the moment the user hits Super+Space.
     pub(crate) fn drop_cached_session(&self) {
-        // Also scrub the live UI state. The launcher window is
-        // hidden at this point (persist_session fired during the
-        // Space → preview handoff), but its entry text, model
-        // rows, and selection are still populated — they were
-        // intentionally preserved on soft-hide so the cached
-        // snapshot could restore them. Without wiping them here,
-        // the next show() sees cached_session=None, skips
-        // restore_session, and presents the window with whatever
-        // the pre-hide UI state happened to be — which is exactly
-        // what the user reports as "Super+Space opens with old
-        // query and old selection after launching from preview".
-        self.cached_session.borrow_mut().take();
-        self.user_selected_override.set(false);
-
-        if let Some(id) = self.pending_debounce.borrow_mut().take() {
-            id.remove();
-        }
-
-        self.entry.set_text("");
-        self.chips.activate_index(0);
-        self.current_category.set(None);
-        self.filter.changed(gtk::FilterChange::Different);
-
-        self.selection
-            .set_autoselect(false);
-        let n = self.model.n_items();
-        for _ in 0..n {
-            self.model.remove(0);
-        }
-        self.selection
-            .set_selected(gtk::INVALID_LIST_POSITION);
-        self.selection.set_autoselect(true);
-        clear_cached_hits();
-
-        self.scrolled.set_visible(false);
-        self.scrolled.set_vexpand(false);
-        self.chips.container.set_visible(false);
-        self.status.hide();
-
-        self.last_query.borrow_mut().clear();
+        self.scrub_ui();
     }
 
     /// Mark the selection as user-chosen so the response poller's
@@ -261,14 +228,26 @@ impl LauncherController {
     }
 
     /// Reset every piece of session state so the next show is clean.
-    /// Called by launch-completing actions via `clear_and_hide`,
-    /// and on explicit cache invalidation. Bumps `session_epoch`
-    /// first so any in-flight search replies land in a new epoch
-    /// and get discarded by the IPC poller. Drops the cached
-    /// session snapshot — after this, the next show is a blank
-    /// launcher.
+    /// Called by launch-completing actions via `clear_and_hide`.
+    /// Bumps `session_epoch` first so any in-flight search replies
+    /// land in a new epoch and get discarded by the IPC poller;
+    /// the remainder of the work is delegated to `scrub_ui`.
     pub(crate) fn clear_session(&self) {
         self.session_epoch.fetch_add(1, Ordering::SeqCst);
+        self.scrub_ui();
+    }
+
+    /// Return every piece of transient UI to the "blank launcher"
+    /// state: drop the cached snapshot, clear the user-selected
+    /// override, cancel any debounced search, empty the entry,
+    /// collapse chips+status, wipe the results model, and restore
+    /// the selection to INVALID. The `autoselect` toggle around
+    /// the model drain prevents SingleSelection's interpolation
+    /// formula (gtksingleselection.c:253-296) from drifting the
+    /// cursor on the per-row items-changed emissions during the
+    /// remove loop. Callers wrap this with whatever pre-state work
+    /// they need (epoch bump, visibility change, etc.).
+    fn scrub_ui(&self) {
         self.cached_session.borrow_mut().take();
         self.user_selected_override.set(false);
 
@@ -281,11 +260,14 @@ impl LauncherController {
         self.current_category.set(None);
         self.filter.changed(gtk::FilterChange::Different);
 
+        self.selection.set_autoselect(false);
         let n = self.model.n_items();
         for _ in 0..n {
             self.model.remove(0);
         }
-        self.selection.set_selected(gtk::INVALID_LIST_POSITION);
+        self.selection
+            .set_selected(gtk::INVALID_LIST_POSITION);
+        self.selection.set_autoselect(true);
         clear_cached_hits();
 
         self.scrolled.set_visible(false);
