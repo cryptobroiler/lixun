@@ -75,9 +75,10 @@ impl GuiControl {
         send_command(cmd, COMMAND_TIMEOUT).await
     }
 
-    /// Daemon shutdown path. Sends `GuiCommand::Quit`, waits up to 500 ms
-    /// for the process to exit, then SIGTERM as fallback. Runs to
-    /// completion on a best-effort basis; errors are logged, not returned.
+    /// Daemon shutdown path. Three-stage escalation: (1) send
+    /// `GuiCommand::Quit` and poll for graceful exit up to 500 ms;
+    /// (2) SIGTERM and poll for exit another 500 ms; (3) SIGKILL.
+    /// Always completes within ~1 s. Errors are logged, not returned.
     pub async fn shutdown(&self) {
         let pid = {
             let mut state = self.state.lock().await;
@@ -94,22 +95,31 @@ impl GuiControl {
         )
         .await;
 
-        let deadline = tokio::time::Instant::now() + QUIT_GRACE_PERIOD;
-        while tokio::time::Instant::now() < deadline {
-            if !process_alive(pid) {
-                tracing::info!("gui_control: gui pid={} exited gracefully", pid);
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
+        if wait_for_exit(pid, QUIT_GRACE_PERIOD).await {
+            tracing::info!("gui_control: gui pid={} exited gracefully", pid);
+            return;
         }
 
         tracing::warn!(
-            "gui_control: gui pid={} did not exit within {}ms after Quit (quit_result={:?}), SIGTERM",
+            "gui_control: gui pid={} did not exit within {}ms after Quit (quit_result={:?}), sending SIGTERM",
             pid,
             QUIT_GRACE_PERIOD.as_millis(),
-            quit_result.as_ref().map(|r| r.as_ref().map(|_| "ok").unwrap_or("transport-err")),
+            quit_result
+                .as_ref()
+                .map(|r| r.as_ref().map(|_| "ok").unwrap_or("transport-err")),
         );
         terminate(pid);
+
+        if wait_for_exit(pid, QUIT_GRACE_PERIOD).await {
+            tracing::info!("gui_control: gui pid={} exited after SIGTERM", pid);
+            return;
+        }
+
+        tracing::error!(
+            "gui_control: gui pid={} survived SIGTERM, sending SIGKILL",
+            pid
+        );
+        kill_hard(pid);
     }
 
     /// Called by the spawn-watcher task when the GUI process exits
@@ -209,6 +219,21 @@ async fn send_command(cmd: GuiCommand, timeout: Duration) -> anyhow::Result<GuiR
 
 fn terminate(pid: u32) {
     let _ = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+}
+
+fn kill_hard(pid: u32) {
+    let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+}
+
+async fn wait_for_exit(pid: u32, budget: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + budget;
+    while tokio::time::Instant::now() < deadline {
+        if !process_alive(pid) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    !process_alive(pid)
 }
 
 fn process_alive(pid: u32) -> bool {
