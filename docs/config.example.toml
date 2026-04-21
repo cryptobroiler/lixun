@@ -262,6 +262,28 @@ global_toggle = "Super+space"
 
 # ─── Preview (Quick-Look style panel) ─────────────────────────────────
 #
+# ============================================================
+# Launcher window sizing
+# ============================================================
+#
+# Width and height of the launcher overlay, expressed as a percentage
+# of the monitor's geometry at show time. Values are clamped to
+# [10, 95] — anything below 10% is unusable and 100% covers the entire
+# screen with no breathing room.
+#
+# Defaults: 40% wide × 60% tall. A 1920×1080 monitor yields 768×648.
+# CSS floors (.lixun-window min-width/min-height in the embedded
+# stylesheet) kick in on pathologically tiny monitors, so setting low
+# percentages on a big monitor is safe; setting them on a 10" monitor
+# lands on the floor.
+[gui]
+# width_percent = 40
+# height_percent = 60
+
+# ============================================================
+# Preview subsystem
+# ============================================================
+#
 # Configures the preview subsystem. This section is parsed today by the
 # daemon but is not yet wired to runtime behaviour; it is the stable
 # schema preview plugins (code, image, pdf, office, email, A/V, text)
