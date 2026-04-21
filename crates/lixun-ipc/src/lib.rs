@@ -59,7 +59,19 @@ pub enum Request {
     /// resolved from an id alone. The daemon writes the Hit to a
     /// tempfile and spawns `lixun-preview` with `--hit-json <path>`.
     /// Boxed to keep the `Request` enum compact.
-    Preview { hit: Box<Hit> },
+    ///
+    /// `monitor` carries the connector name (e.g. `"eDP-1"`,
+    /// `"DP-2"`) of the display the launcher is currently on, so
+    /// the preview binary can open on the same monitor without
+    /// having to guess from a pointer position that may not even
+    /// intersect its own (not-yet-mapped) surface. Optional for
+    /// backward compat and because a GUI that fails to resolve its
+    /// monitor still prefers to spawn a preview than to refuse
+    /// one — the binary falls back to pointer-based selection.
+    Preview {
+        hit: Box<Hit>,
+        monitor: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -393,16 +405,34 @@ mod tests {
         let mut buf = BytesMut::new();
         let req = Request::Preview {
             hit: Box::new(fake_hit()),
+            monitor: Some("eDP-1".into()),
         };
         codec.encode(req, &mut buf).unwrap();
 
         let decoded = codec.decode(&mut buf).unwrap().unwrap();
         match decoded {
-            Request::Preview { hit } => {
+            Request::Preview { hit, monitor } => {
                 assert_eq!(hit.id.0, "fs:/tmp/demo.txt");
                 assert_eq!(hit.title, "demo.txt");
                 assert!(matches!(hit.action, lixun_core::Action::OpenFile { .. }));
+                assert_eq!(monitor.as_deref(), Some("eDP-1"));
             }
+            other => panic!("Expected Preview variant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_preview_monitor_none_roundtrips() {
+        let mut codec = FrameCodec::default();
+        let mut buf = BytesMut::new();
+        let req = Request::Preview {
+            hit: Box::new(fake_hit()),
+            monitor: None,
+        };
+        codec.encode(req, &mut buf).unwrap();
+        let decoded = codec.decode(&mut buf).unwrap().unwrap();
+        match decoded {
+            Request::Preview { monitor, .. } => assert_eq!(monitor, None),
             other => panic!("Expected Preview variant, got {:?}", other),
         }
     }
@@ -416,6 +446,7 @@ mod tests {
             .encode(
                 Request::Preview {
                     hit: Box::new(fake_hit()),
+                    monitor: None,
                 },
                 &mut buf,
             )

@@ -132,9 +132,14 @@ fn install_action_group(row: &gtk::Box, hit: &Hit) {
     group.add_action(&copy);
 
     let quick_hit = hit.clone();
+    let quick_row = row.clone();
     let quick = gio::SimpleAction::new("quicklook", None);
     quick.connect_activate(move |_, _| {
-        send_preview_request(&quick_hit);
+        let monitor = quick_row
+            .root()
+            .and_then(|r| r.downcast::<gtk::ApplicationWindow>().ok())
+            .and_then(|w| crate::ipc::current_monitor_connector(&w));
+        send_preview_request(&quick_hit, monitor);
     });
     group.add_action(&quick);
 

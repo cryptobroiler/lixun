@@ -53,7 +53,15 @@ impl PreviewSpawner {
     /// tempfile in `$XDG_RUNTIME_DIR` and spawns `lixun-preview
     /// --hit-json <path>`. Returns once the child has been spawned
     /// (does not wait for render).
-    pub async fn dispatch(&self, hit: Hit) -> anyhow::Result<()> {
+    ///
+    /// `monitor` is the connector name (`"eDP-1"`, `"DP-2"`, …)
+    /// the launcher is currently on. When set it's exported as
+    /// `LIXUN_PREVIEW_MONITOR`, which the preview binary reads and
+    /// matches against `display.monitors()` to open on the same
+    /// screen. When `None`, the preview binary falls back to
+    /// pointer-based monitor selection — which is unreliable for
+    /// a fresh process with no mapped surfaces yet (see BUG-1).
+    pub async fn dispatch(&self, hit: Hit, monitor: Option<String>) -> anyhow::Result<()> {
         let mut state = self.state.lock().await;
 
         if let Some(old_pid) = state.pid.take()
@@ -79,6 +87,9 @@ impl PreviewSpawner {
         let env = session_env::discover_gui_env();
         for (k, v) in &env {
             cmd.env(k, v);
+        }
+        if let Some(connector) = &monitor {
+            cmd.env("LIXUN_PREVIEW_MONITOR", connector);
         }
         let mut child = match cmd.spawn() {
             Ok(c) => c,
