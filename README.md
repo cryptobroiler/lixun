@@ -132,6 +132,36 @@ See [`docs/config.example.toml`](docs/config.example.toml) for the full referenc
 
 ---
 
+## Theming
+
+Lixun is fully themable via GTK4 CSS. Drop a `style.css` at
+`~/.config/lixun/style.css`; it loads at `APPLICATION+1` priority on top
+of the built-in theme, so every declaration you write overrides the
+default. Restart the daemon (or the GUI) to apply:
+
+```sh
+systemctl --user restart lixund
+```
+
+See [`docs/style.example.css`](docs/style.example.css) for the full
+selector reference (window, entry, result rows, status bar, …) plus
+ready-made recipes for a light theme, an alternate accent colour,
+bigger text, and denser rows. The file doubles as a copy of the
+default stylesheet, so you can fork it and tweak.
+
+Inspect the live widget tree with:
+
+```sh
+GTK_DEBUG=interactive lixun-gui
+```
+
+Every themeable widget carries both a stable CSS id (`#lixun-root`,
+`#lixun-entry`, `#lixun-results`, …) and a class (`.lixun-hit`,
+`.lixun-top-hit`, …) so you can target either the specific widget or
+all widgets of a kind.
+
+---
+
 ## Architecture
 
 ```

@@ -1,0 +1,278 @@
+/* ~/.config/lixun/style.css
+ *
+ * Copy this file to the path above and edit. Lixun loads it at GUI
+ * startup with priority APPLICATION+1, so every declaration here
+ * overrides the built-in theme. Restart the daemon to pick up changes:
+ *
+ *     systemctl --user restart lixund
+ *
+ * Selector reference (launcher only; preview window will ship in G2
+ * and its selectors will be documented there):
+ *
+ *   #lixun-root            - the window itself (layer-shell surface)
+ *   #lixun-entry           - the search text entry
+ *   #lixun-chips           - category-filter chip container (Box)
+ *   .lixun-chip            - each chip (ToggleButton)
+ *   #lixun-results-scroll  - scrolled window wrapping the result list
+ *   #lixun-results         - the result ListView itself
+ *   #lixun-hit             - each result row (Box); also has class .lixun-hit
+ *   .lixun-hit             - class form of the row, useful for state
+ *                            selectors like `.lixun-hit:focus-within`
+ *   .lixun-top-hit         - toggled onto the currently selected row
+ *                            (our "hero" card frame; selection indicator)
+ *   .lixun-title           - row title label
+ *   .lixun-subtitle        - row subtitle / path label
+ *   .lixun-kind            - right-aligned category badge
+ *   #lixun-status          - bottom status bar (Revealer)
+ *   #lixun-status-inner    - inner content box of the status bar
+ *   .lixun-status          - class on the inner box (same node)
+ *   .lixun-status-label    - muted text inside status bar
+ *   .lixun-status-calc     - calculator result display
+ *   .lixun-status-action   - action buttons in status bar (web search,
+ *                            copy, etc.)
+ *   .lixun-showing         - applied to #lixun-root while fading in
+ *   .lixun-hiding          - applied to #lixun-root while fading out
+ *
+ * Native GTK4 selectors (row, listview, button, label, entry) still
+ * work if you need finer control. Inspect the live widget tree with
+ *
+ *     GTK_DEBUG=interactive lixun-gui
+ */
+
+/* Lixun — Spotlight-like launcher for Linux. Dark translucent theme. */
+
+/* ----- Design tokens (GTK supports @define-color; CSS custom properties
+   are only partially honored by GtkCssProvider, so we use hardcoded values
+   below but group them visually for maintainability). ----- */
+
+/* ----- Main window ----- */
+.lixun-window {
+    background: rgba(28, 28, 32, 0.92);
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7),
+                0 8px 16px rgba(0, 0, 0, 0.5);
+}
+
+/* ----- Search entry ----- */
+.lixun-entry {
+    font-size: 24px;
+    font-weight: 300;
+    padding: 12px 16px;
+    background-color: transparent;
+    color: #f0f0f4;
+    caret-color: #4b8dff;
+    border: none;
+    border-radius: 10px;
+}
+
+.lixun-entry:focus,
+.lixun-entry:focus-within {
+    outline: none;
+    box-shadow: inset 0 -1px 0 rgba(75, 141, 255, 0.6);
+}
+
+.lixun-entry placeholder {
+    color: #7b7b86;
+}
+
+/* ----- Results container ----- */
+.lixun-results {
+    background-color: transparent;
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+    padding-top: 4px;
+    min-height: 320px;
+}
+
+/* ----- Hit row ----- */
+.lixun-hit {
+    padding: 8px 12px;
+    border-radius: 10px;
+    transition: background-color 0.12s ease;
+}
+
+.lixun-hit:hover {
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+/* Selection indicator = hero frame only (see `.lixun-top-hit` below).
+   Neutralise every GTK theme fill on the selected row so the hero
+   frame is the sole visual cue. The theme (Breeze, Adwaita, etc.)
+   aggressively paints `row:selected`; we stomp it at three layers. */
+listview row,
+listview row:selected,
+listview row:selected:focus,
+listview row:selected:hover {
+    background-color: transparent;
+    background-image: none;
+}
+
+/* Keyboard focus ring: neutral white so it stacks cleanly on top of
+   the hero frame without competing for color attention. */
+row:focus-within .lixun-hit,
+.lixun-hit:focus-within {
+    outline: 2px solid rgba(255, 255, 255, 0.55);
+    outline-offset: -2px;
+}
+
+/* Hero (top-hit) row: card-like elevation. The row factory toggles
+   `.lixun-top-hit` onto the selected item only, so this class is
+   itself the selection indicator. */
+.lixun-top-hit {
+    padding: 12px 14px;
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* ----- Title / subtitle / kind ----- */
+.lixun-title {
+    font-weight: 500;
+    color: #f0f0f4;
+    font-size: 14px;
+}
+
+.lixun-top-hit .lixun-title {
+    font-size: 16px;
+}
+
+.lixun-subtitle {
+    color: #a8a8b2;
+    font-size: 11px;
+}
+
+.lixun-kind {
+    color: #7b7b86;
+    font-size: 10px;
+    font-weight: 500;
+    margin-right: 4px;
+}
+
+/* ----- Status bar ----- */
+.lixun-status {
+    padding: 6px 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 0 0 10px 10px;
+    margin-top: 4px;
+}
+
+.lixun-status-label {
+    color: #a8a8b2;
+    font-size: 12px;
+}
+
+.lixun-status-calc {
+    color: #f0f0f4;
+    font-size: 14px;
+    font-weight: 500;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+}
+
+.lixun-status-action {
+    background-color: rgba(75, 141, 255, 0.22);
+    color: #f0f0f4;
+    border: 1px solid rgba(75, 141, 255, 0.35);
+    border-radius: 6px;
+    padding: 2px 10px;
+    font-size: 11px;
+}
+
+.lixun-status-action:hover {
+    background-color: rgba(75, 141, 255, 0.35);
+}
+
+/* ----- Show / hide transitions ----- */
+@keyframes lixun-fade-slide-in {
+    from {
+        opacity: 0;
+        transform: translateY(-8px) scale(0.98);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@keyframes lixun-fade-slide-out {
+    from {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+    to {
+        opacity: 0;
+        transform: translateY(-8px) scale(0.98);
+    }
+}
+
+.lixun-showing {
+    animation: lixun-fade-slide-in 150ms ease-out;
+}
+
+.lixun-hiding {
+    animation: lixun-fade-slide-out 120ms ease-in;
+}
+
+/* =============================================================== *
+ *  Common customisations — uncomment and tweak to taste.           *
+ *  None of the rules below are loaded by default; they are just    *
+ *  recipes for common user tweaks.                                 *
+ * =============================================================== */
+
+/* ----- Light theme ----------------------------------------------- *
+#lixun-root {
+    background: rgba(250, 250, 252, 0.96);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18),
+                0 8px 16px rgba(0, 0, 0, 0.10);
+}
+#lixun-entry {
+    color: #1d1d22;
+    caret-color: #4b8dff;
+}
+.lixun-title { color: #1d1d22; }
+.lixun-subtitle { color: #5c5c66; }
+.lixun-kind { color: #8a8a94; }
+.lixun-top-hit {
+    background-color: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.10);
+}
+.lixun-hit:hover { background-color: rgba(0, 0, 0, 0.04); }
+.lixun-hit:focus-within, row:focus-within .lixun-hit {
+    outline-color: rgba(75, 141, 255, 0.55);
+}
+*/
+
+/* ----- Alternate accent (purple) --------------------------------- *
+#lixun-entry {
+    caret-color: #a36bff;
+}
+#lixun-entry:focus,
+#lixun-entry:focus-within {
+    box-shadow: inset 0 -1px 0 rgba(163, 107, 255, 0.7);
+}
+.lixun-status-action {
+    background-color: rgba(163, 107, 255, 0.22);
+    border-color: rgba(163, 107, 255, 0.35);
+}
+.lixun-status-action:hover {
+    background-color: rgba(163, 107, 255, 0.35);
+}
+*/
+
+/* ----- Bigger text (accessibility / 4K displays) ----------------- *
+#lixun-entry        { font-size: 28px; padding: 16px 20px; }
+.lixun-title        { font-size: 16px; }
+.lixun-top-hit .lixun-title { font-size: 18px; }
+.lixun-subtitle     { font-size: 13px; }
+.lixun-kind         { font-size: 12px; }
+.lixun-status-label { font-size: 14px; }
+*/
+
+/* ----- Tighter / denser rows ------------------------------------- *
+.lixun-hit          { padding: 4px 10px; }
+.lixun-top-hit      { padding: 8px 12px; }
+*/
+
+/* ----- Disable entrance / exit animation ------------------------- *
+.lixun-showing { animation: none; }
+.lixun-hiding  { animation: none; }
+*/
