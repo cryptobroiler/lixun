@@ -149,6 +149,29 @@ pub(crate) fn install_keyboard_handler(
             if entry_has_focus(&entry, &window) && is_printable_key(key, state) {
                 return glib::signal::Propagation::Proceed;
             }
+            // BUG-5: focus has left the entry (list_view grabbed it on
+            // Down, or user clicked a result row). A printable key that
+            // is NOT a registered accel (quick_look=Space stays a
+            // quick_look trigger) should warp back to the entry and
+            // continue typing — that is the Raycast/Alfred contract.
+            // Without this, once focus moves to the list the launcher
+            // becomes a dead keyboard surface until Escape/Enter/click.
+            if !entry_has_focus(&entry, &window)
+                && is_printable_key(key, state)
+                && !accel_matches(&keybindings.quick_look, key, state)
+                && let Some(ch) = key.to_unicode()
+            {
+                let cur = entry.text().to_string();
+                let mut appended = cur;
+                appended.push(ch);
+                entry.set_text(&appended);
+                entry.set_position(-1);
+                entry.grab_focus();
+                // Move the caret to the end after grab_focus (which by
+                // default selects all text).
+                entry.set_position(-1);
+                return glib::signal::Propagation::Stop;
+            }
             let ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
             let shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
             if accel_matches(&keybindings.previous_result, key, state) {
