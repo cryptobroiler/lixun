@@ -592,6 +592,22 @@ fn install_response_poller(
         let current = epoch.load(Ordering::SeqCst);
         if current != last_epoch.get() {
             last_epoch.set(current);
+            // Snapshot the DocId of the currently-selected row before
+            // we clear the model. A silent refresh fired by
+            // restore_session lands here too, and we must not warp
+            // the cursor off the user's restored choice just because
+            // the index generated a fresh ranking. If the same DocId
+            // is present in the new hits we restore the cursor
+            // there; otherwise we fall back to position 0 as a new
+            // search does.
+            let prior_selected = {
+                let idx = selection.selected();
+                selection.item(idx).and_then(|obj| {
+                    obj.downcast::<gtk::StringObject>()
+                        .ok()
+                        .map(|s| s.string().to_string())
+                })
+            };
             let hits_snapshot = {
                 let mut hits = responses.lock().unwrap();
                 std::mem::take(&mut *hits)
@@ -603,8 +619,13 @@ fn install_response_poller(
             update_results(&model, &hits_snapshot);
             filter.changed(gtk::FilterChange::Different);
             if !hits_snapshot.is_empty() {
-                selection.set_selected(0);
-                list_view.scroll_to(0, gtk::ListScrollFlags::NONE, None);
+                let new_idx = prior_selected
+                    .as_deref()
+                    .and_then(|want| hits_snapshot.iter().position(|h| h.id.0 == want))
+                    .map(|i| i as u32)
+                    .unwrap_or(0);
+                selection.set_selected(new_idx);
+                list_view.scroll_to(new_idx, gtk::ListScrollFlags::NONE, None);
             }
 
             if let Some(calc) = calc_snapshot.as_ref() {
