@@ -7,8 +7,13 @@ edition.workspace = true
 name = "lixun_preview_bundle"
 path = "src/lib.rs"
 
+[features]
+default = ["text"]
+text = ["dep:lixun-preview-text"]
+
 [dependencies]
 lixun-preview = { path = "../lixun-preview" }
+lixun-preview-text = { path = "../lixun-preview-text", optional = true }
 
 [dev-dependencies]
 lixun-core = { path = "../lixun-core" }
