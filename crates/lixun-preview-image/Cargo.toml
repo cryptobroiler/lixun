@@ -1,0 +1,18 @@
+[package]
+name = "lixun-preview-image"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lixun-core = { path = "../lixun-core" }
+lixun-preview = { path = "../lixun-preview" }
+anyhow.workspace = true
+inventory.workspace = true
+tracing.workspace = true
+gtk = { package = "gtk4", version = "0.9", features = ["v4_12"] }
+gdk = { package = "gdk4", version = "0.9" }
+gio = "0.20"
+
+[lib]
+name = "lixun_preview_image"
+path = "src/lib.rs"
