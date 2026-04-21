@@ -369,6 +369,16 @@ fn install_close_controllers(
     }
 
     let key = gtk::EventControllerKey::new();
+    // Capture phase is mandatory here. In the default (bubble) phase,
+    // a focused gtk::Button — and the header's Open button becomes
+    // focused by default when the window is mapped — consumes
+    // Space as "activate me" before the event reaches this window-
+    // level controller, so Space launches the file instead of
+    // closing the preview. By running on Capture the preview's own
+    // Escape/Space/Enter mapping preempts every child widget's
+    // keyboard default, preserving the close-on-Space contract even
+    // when the Open button has focus.
+    key.set_propagation_phase(gtk::PropagationPhase::Capture);
     {
         let app = app.clone();
         let openable = openable.clone();
