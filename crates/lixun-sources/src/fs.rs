@@ -28,6 +28,7 @@ struct FileMeta {
     filename: String,
     mtime: i64,
     size: u64,
+    is_dir: bool,
 }
 
 impl FsSource {
@@ -88,7 +89,13 @@ impl FsSource {
     }
 
     fn build_document(meta: FileMeta, body: Option<String>, extract_fail: bool) -> Document {
-        let (icon_name, kind_label) = Self::metadata_for_path(&meta.path);
+        // Directories: fixed folder icon + "Folder" kind, no body/extract.
+        // Files: mime-based icon + kind via mime_icons.
+        let (icon_name, kind_label) = if meta.is_dir {
+            ("folder".to_string(), "Folder".to_string())
+        } else {
+            Self::metadata_for_path(&meta.path)
+        };
 
         Document {
             id: DocId(format!("fs:{}", meta.path_str)),
@@ -101,6 +108,11 @@ impl FsSource {
             path: meta.path_str,
             mtime: meta.mtime,
             size: meta.size,
+            // xdg-open and gio::AppInfo::launch_default_for_uri both
+            // route directories to the user's default file manager
+            // (nautilus/dolphin/nemo/...), so the same OpenFile
+            // variant works for both files and dirs without needing
+            // a separate OpenFolder action.
             action: Action::OpenFile { path: meta.path },
             sender: None,
             recipients: None,
@@ -146,7 +158,13 @@ impl FsSource {
                 .filter_entry(|e| !self.is_excluded(e.path()))
                 .filter_map(|e| e.ok())
             {
-                if !entry.file_type().is_file() {
+                let ft = entry.file_type();
+                if !ft.is_file() && !ft.is_dir() {
+                    continue;
+                }
+                // Skip the walk root itself — a user searching for "/"
+                // or the root dir adds no value, only clutter.
+                if entry.depth() == 0 {
                     continue;
                 }
 
@@ -185,6 +203,7 @@ impl FsSource {
                         .unwrap_or_default(),
                     mtime,
                     size: metadata.len(),
+                    is_dir: ft.is_dir(),
                 });
             }
         }
@@ -236,7 +255,11 @@ impl FsSource {
                 chunk
                     .into_par_iter()
                     .map(|meta| {
-                        let (body, extract_fail) = if meta.size <= max_size {
+                        // Directories: skip content extraction (no body
+                        // to extract, only name is indexed for matching).
+                        let (body, extract_fail) = if meta.is_dir {
+                            (None, false)
+                        } else if meta.size <= max_size {
                             match Self::extract_content(&meta.path) {
                                 Ok(Some(text)) => (Some(text), false),
                                 Ok(None) => (None, false),
@@ -288,7 +311,13 @@ impl FsSource {
                 .filter_entry(|e| !self.is_excluded(e.path()))
                 .filter_map(|e| e.ok())
             {
-                if !entry.file_type().is_file() {
+                let ft = entry.file_type();
+                if !ft.is_file() && !ft.is_dir() {
+                    continue;
+                }
+                // Skip the walk root itself — indexing "/" or the
+                // home dir as a hit adds no value, only clutter.
+                if entry.depth() == 0 {
                     continue;
                 }
 
@@ -315,6 +344,7 @@ impl FsSource {
                         .unwrap_or_default(),
                     mtime,
                     size: metadata.len(),
+                    is_dir: ft.is_dir(),
                 });
             }
         }
@@ -329,7 +359,9 @@ impl FsSource {
             metas
                 .into_par_iter()
                 .map(|meta| {
-                    let (body, extract_fail) = if meta.size <= max_size {
+                    let (body, extract_fail) = if meta.is_dir {
+                        (None, false)
+                    } else if meta.size <= max_size {
                         match Self::extract_content(&meta.path) {
                             Ok(Some(text)) => (Some(text), false),
                             Ok(None) => (None, false),

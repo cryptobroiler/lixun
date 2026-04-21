@@ -367,6 +367,7 @@ pub fn index_file(path: &std::path::Path, max_file_size_mb: u64) -> Result<Docum
         .unwrap_or_default();
 
     let metadata = std::fs::metadata(path)?;
+    let is_dir = metadata.is_dir();
     let mtime = metadata
         .modified()
         .map(|t| {
@@ -378,7 +379,9 @@ pub fn index_file(path: &std::path::Path, max_file_size_mb: u64) -> Result<Docum
     let size = metadata.len();
 
     let max_size = max_file_size_mb * 1024 * 1024;
-    let (body, extract_fail) = if size <= max_size {
+    let (body, extract_fail) = if is_dir {
+        (None, false)
+    } else if size <= max_size {
         match lixun_sources::fs::FsSource::extract_content(path) {
             Ok(Some(text)) => (Some(text), false),
             Ok(None) => (None, false),
@@ -387,7 +390,11 @@ pub fn index_file(path: &std::path::Path, max_file_size_mb: u64) -> Result<Docum
     } else {
         (None, false)
     };
-    let (icon_name, kind_label) = lixun_sources::fs::FsSource::metadata_for_path(path);
+    let (icon_name, kind_label) = if is_dir {
+        ("folder".to_string(), "Folder".to_string())
+    } else {
+        lixun_sources::fs::FsSource::metadata_for_path(path)
+    };
 
     Ok(Document {
         id: DocId(fs_doc_id(path)),
