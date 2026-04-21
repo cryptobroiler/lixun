@@ -11,7 +11,10 @@ use lixun_daemon::config::Keybindings;
 
 use crate::actions::{copy_to_clipboard, execute_action, execute_secondary_action};
 use crate::factory::{synthetic_history_hits, update_results, with_cached_hits};
-use crate::ipc::{IpcClient, request_search_history, send_preview_request, send_record_click};
+use crate::ipc::{
+    IpcClient, current_monitor_connector, request_search_history, send_preview_request,
+    send_record_click,
+};
 use crate::status::StatusBar;
 use crate::window::{CategoryChips, LauncherController};
 
@@ -237,7 +240,10 @@ pub(crate) fn install_keyboard_handler(
             } else if accel_matches(&keybindings.quick_look, key, state) && !entry_has_focus(&entry, &window) {
                     // Only trigger when focus is NOT in entry (i.e. list is focused)
                     // so space can still be typed into the search field.
-                    selected_hit_in(&selection, &filter_model, send_preview_request);
+                    let monitor = current_monitor_connector(&window);
+                    selected_hit_in(&selection, &filter_model, |hit| {
+                        send_preview_request(hit, monitor.clone());
+                    });
                     glib::signal::Propagation::Stop
             } else if accel_matches(&keybindings.filter_all, key, state) {
                     chips.activate_index(0);

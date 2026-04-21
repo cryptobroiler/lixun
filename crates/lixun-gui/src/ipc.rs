@@ -216,10 +216,25 @@ pub(crate) fn send_record_click(doc_id: &str) {
     }
 }
 
-pub(crate) fn send_preview_request(hit: &Hit) {
+/// Resolve the connector name of the monitor that `window` is
+/// currently placed on. Returns `None` if the window hasn't been
+/// mapped yet or no monitor can be determined (unusual — happens
+/// on initial show race). The connector string (`"eDP-1"`,
+/// `"DP-2"`, …) is what `lixun-preview` matches against its own
+/// `display.monitors()` list to open on the same screen.
+pub(crate) fn current_monitor_connector(window: &gtk::ApplicationWindow) -> Option<String> {
+    use gtk::prelude::*;
+    let surface = window.surface()?;
+    let display = gtk::prelude::WidgetExt::display(window);
+    let monitor = display.monitor_at_surface(&surface)?;
+    monitor.connector().map(|s| String::from(s.as_str()))
+}
+
+pub(crate) fn send_preview_request(hit: &Hit, monitor: Option<String>) {
     let sock = socket_path();
     let req = Request::Preview {
         hit: Box::new(hit.clone()),
+        monitor: monitor.clone(),
     };
     let Ok(json) = serde_json::to_vec(&req) else {
         return;
@@ -230,7 +245,11 @@ pub(crate) fn send_preview_request(hit: &Hit) {
     buf.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
     buf.extend_from_slice(&json);
 
-    tracing::info!("gui: send_preview_request hit_id={}", hit.id.0);
+    tracing::info!(
+        "gui: send_preview_request hit_id={} monitor={:?}",
+        hit.id.0,
+        monitor
+    );
     if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&sock) {
         let _ = stream.write_all(&buf);
     }

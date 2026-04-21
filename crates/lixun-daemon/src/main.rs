@@ -554,7 +554,7 @@ async fn handle_client(
             let log = query_log.read().await;
             Response::Queries(log.recent(limit as usize))
         }
-        Request::Preview { hit } => match preview_spawner.dispatch(*hit).await {
+        Request::Preview { hit, monitor } => match preview_spawner.dispatch(*hit, monitor).await {
             Ok(()) => Response::Ok,
             Err(e) => {
                 tracing::error!("preview_spawn: dispatch failed: {}", e);

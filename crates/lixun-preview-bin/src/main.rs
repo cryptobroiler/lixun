@@ -221,7 +221,41 @@ fn build_header(hit: &Hit, plugin_id: &str) -> gtk::Box {
     header
 }
 
+/// Resolve which monitor the preview window should open on.
+///
+/// Order of preference:
+/// 1. `LIXUN_PREVIEW_MONITOR` env var set by the daemon — contains
+///    the launcher's current monitor connector name (`"eDP-1"`,
+///    `"DP-2"`, …). Linear-scan `display.monitors()` for the
+///    matching `connector()` and return it. This is the correct
+///    path for normal launcher→Space flow.
+/// 2. Pointer position — legacy fallback. Unreliable in a fresh
+///    preview process because `pointer.surface_at_position()`
+///    intersects only the process's own surfaces, and we have
+///    none until `window.present()`. Kept for direct `lixun-preview
+///    --hit-json` invocation where no daemon set the env var.
+/// 3. First monitor in `display.monitors()`.
 fn pick_monitor(display: &gtk::gdk::Display) -> Option<gtk::gdk::Monitor> {
+    if let Ok(requested) = std::env::var("LIXUN_PREVIEW_MONITOR")
+        && !requested.is_empty()
+    {
+        let monitors = display.monitors();
+        for i in 0..monitors.n_items() {
+            if let Some(obj) = monitors.item(i)
+                && let Ok(monitor) = obj.downcast::<gtk::gdk::Monitor>()
+                && let Some(connector) = monitor.connector()
+                && connector.as_str() == requested
+            {
+                tracing::info!("preview: monitor matched connector={}", requested);
+                return Some(monitor);
+            }
+        }
+        tracing::warn!(
+            "preview: LIXUN_PREVIEW_MONITOR={} did not match any connector; falling back",
+            requested
+        );
+    }
+
     if let Some(seat) = display.default_seat()
         && let Some(pointer) = seat.pointer()
     {
