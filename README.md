@@ -36,7 +36,7 @@ Everything local. No telemetry, no cloud, no vendor.
 git clone https://repo.dkp.hk/denis/lixun.git
 cd lixun
 cargo build --workspace --release
-cp target/release/{lixun,lixund,lixun-gui} /tmp/lixun-arch-tarball/
+cp target/release/{lixun,lixund,lixun-gui,lixun-preview} /tmp/lixun-arch-tarball/
 tar -C /tmp/lixun-arch-tarball -czf packaging/arch/lixun-0.3.0-x86_64.tar.gz .
 cd packaging/arch && makepkg -f
 sudo pacman -U lixun-bin-0.3.0-1-x86_64.pkg.tar.zst
@@ -47,9 +47,10 @@ systemctl --user enable --now lixund.service
 
 ```sh
 cargo build --workspace --release
-install -Dm755 target/release/lixund    /usr/local/bin/lixund
-install -Dm755 target/release/lixun     /usr/local/bin/lixun
-install -Dm755 target/release/lixun-gui /usr/local/bin/lixun-gui
+install -Dm755 target/release/lixund        /usr/local/bin/lixund
+install -Dm755 target/release/lixun         /usr/local/bin/lixun
+install -Dm755 target/release/lixun-gui     /usr/local/bin/lixun-gui
+install -Dm755 target/release/lixun-preview /usr/local/bin/lixun-preview
 install -Dm644 packaging/systemd/lixund.service \
   ~/.config/systemd/user/lixund.service
 systemctl --user enable --now lixund.service
@@ -192,9 +193,15 @@ all widgets of a kind.
 - **GUI (`lixun-gui`)** — GTK4 window with `gtk4-layer-shell`, spawned on
   demand by the daemon. Fully stateless; re-spawnable.
 - **CLI (`lixun`)** — thin IPC client.
-- **Plugin registration** — `inventory::submit!` + anchor crate pattern.
-  Adding a plugin: new crate with `PluginFactory` impl → add to
-  `lixun-plugin-bundle` Cargo features → nothing else to touch in the daemon.
+- **Preview (`lixun-preview`)** — short-lived companion process spawned
+  by the daemon when the user presses Space on a focused result row.
+  Renders the hit in a second layer-shell overlay using a format plugin
+  (text/image/pdf/code/email/office/av). Closes on Escape, Space, or
+  focus-loss; launcher remains alive underneath.
+- **Plugin registration** — `inventory::submit!` + anchor crate pattern
+  used twice: once for source plugins (`lixun-plugin-bundle`) and once
+  for preview format plugins (`lixun-preview-bundle`). Adding either:
+  new crate → feature in the bundle → nothing else in the daemon.
 
 ### Plugin lifecycle
 
@@ -234,6 +241,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 | `lixun-source-maildir` | Maildir plugin |
 | `lixun-source-thunderbird` | Gloda + mbox attachments |
 | `lixun-plugin-bundle` | Linker anchor (holds `use lixun_source_X as _`) |
+| `lixun-preview` | `PreviewPlugin` trait + `select_plugin` + shared CSS helper |
+| `lixun-preview-bundle` | Linker anchor for preview format plugins |
+| `lixun-preview-bin` | `lixun-preview` binary (layer-shell overlay + plugin host) |
 
 ### Writing a new source plugin
 

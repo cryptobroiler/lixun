@@ -22,6 +22,7 @@ package() {
   install -Dm755 "lixund" "$pkgdir/usr/bin/lixund"
   install -Dm755 "lixun" "$pkgdir/usr/bin/lixun"
   install -Dm755 "lixun-gui" "$pkgdir/usr/bin/lixun-gui"
+  install -Dm755 "lixun-preview" "$pkgdir/usr/bin/lixun-preview"
   install -Dm644 "${srcdir}/systemd-lixund.service" "$pkgdir/usr/lib/systemd/user/lixund.service"
   install -Dm644 "${srcdir}/lixun.desktop" "$pkgdir/usr/share/applications/lixun.desktop"
 }
