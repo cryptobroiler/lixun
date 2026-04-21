@@ -16,6 +16,7 @@ members = [
     "crates/lixun-preview-bundle",
     "crates/lixun-preview-bin",
     "crates/lixun-preview-text",
+    "crates/lixun-preview-image",
 ]
 resolver = "2"
 

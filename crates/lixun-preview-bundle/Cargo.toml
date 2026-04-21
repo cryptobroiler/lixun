@@ -8,12 +8,14 @@ name = "lixun_preview_bundle"
 path = "src/lib.rs"
 
 [features]
-default = ["text"]
+default = ["text", "image"]
 text = ["dep:lixun-preview-text"]
+image = ["dep:lixun-preview-image"]
 
 [dependencies]
 lixun-preview = { path = "../lixun-preview" }
 lixun-preview-text = { path = "../lixun-preview-text", optional = true }
+lixun-preview-image = { path = "../lixun-preview-image", optional = true }
 
 [dev-dependencies]
 lixun-core = { path = "../lixun-core" }
