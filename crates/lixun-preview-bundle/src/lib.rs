@@ -30,6 +30,9 @@ use lixun_preview_image as _;
 #[cfg(feature = "pdf")]
 use lixun_preview_pdf as _;
 
+#[cfg(feature = "code")]
+use lixun_preview_code as _;
+
 #[cfg(test)]
 mod tests {
     use lixun_core::{Action, Category, DocId, Hit};
