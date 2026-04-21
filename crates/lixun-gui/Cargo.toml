@@ -21,6 +21,7 @@ opener = "0.8"
 async-channel = "2"
 libc = "0.2"
 lixun-daemon = { path = "../lixun-daemon" }
+lixun-preview = { path = "../lixun-preview" }
 
 [lib]
 name = "lixun_gui"
