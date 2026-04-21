@@ -21,7 +21,7 @@ use gtk::glib;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use lixun_core::{Action, Hit};
-use lixun_preview::{PreviewPluginCfg, install_user_css, select_plugin};
+use lixun_preview::{PreviewPluginCfg, SizingPreference, install_user_css, select_plugin};
 
 use lixun_preview_bundle as _;
 
@@ -138,7 +138,11 @@ fn build_preview_window(
     let display = gtk::gdk::Display::default()
         .ok_or_else(|| anyhow::anyhow!("no default GDK display"))?;
 
-    if let Some(monitor) = pick_monitor(&display) {
+    // Compute the effective cap (w_max, h_max) from config and the
+    // active monitor. This is the configured ceiling regardless of
+    // sizing strategy; FixedCap uses it as the default window size,
+    // FitToContent uses it as the ScrolledWindow max_content clamp.
+    let (w_max, h_max) = if let Some(monitor) = pick_monitor(&display) {
         window.set_monitor(Some(&monitor));
         let geometry = monitor.geometry();
         let w = (geometry.width() * i32::from(gui_cfg.preview_width_percent) / 100)
@@ -147,7 +151,21 @@ fn build_preview_window(
         let h = (geometry.height() * i32::from(gui_cfg.preview_height_percent) / 100)
             .min(gui_cfg.preview_max_height_px)
             .max(MIN_HEIGHT);
-        window.set_default_size(w, h);
+        (w, h)
+    } else {
+        (MIN_WIDTH, MIN_HEIGHT)
+    };
+
+    let sizing = plugin.sizing();
+    match sizing {
+        SizingPreference::FixedCap => {
+            window.set_default_size(w_max, h_max);
+        }
+        SizingPreference::FitToContent => {
+            // Start minimal; content will push the window up to cap
+            // via the ScrolledWindow's propagate_natural_* below.
+            window.set_default_size(MIN_WIDTH, MIN_HEIGHT);
+        }
     }
 
     install_user_css(&display);
@@ -158,8 +176,27 @@ fn build_preview_window(
 
     let content_scroll = gtk::ScrolledWindow::new();
     content_scroll.set_widget_name("lixun-preview-content");
-    content_scroll.set_vexpand(true);
-    content_scroll.set_hexpand(true);
+    match sizing {
+        SizingPreference::FixedCap => {
+            // Scroll fills window; content bigger than viewport scrolls.
+            // This is the historical default for media plugins.
+            content_scroll.set_vexpand(true);
+            content_scroll.set_hexpand(true);
+        }
+        SizingPreference::FitToContent => {
+            // propagate_natural_* + max_content_* is the GTK4 idiom
+            // for 'natural-size up to cap'. The scroll asks its
+            // child for its natural size, clamps at (w_max, h_max),
+            // and reports that to the window — which, with a MIN
+            // default size, shrinks to fit. Expand flags are dropped
+            // so the scroll's size-request is honest, not
+            // whatever-the-parent-gives-it.
+            content_scroll.set_max_content_width(w_max);
+            content_scroll.set_max_content_height(h_max);
+            content_scroll.set_propagate_natural_width(true);
+            content_scroll.set_propagate_natural_height(true);
+        }
+    }
 
     match plugin.build(hit, &plugin_cfg) {
         Ok(widget) => content_scroll.set_child(Some(&widget)),
