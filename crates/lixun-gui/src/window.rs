@@ -653,13 +653,36 @@ fn install_response_poller(
             update_results(&model, &selection, &hits_snapshot);
             filter.changed(gtk::FilterChange::Different);
             if !hits_snapshot.is_empty() {
-                let new_idx = prior_selected
+                // Compute the desired index in the source hits list,
+                // then translate it to the filtered view position by
+                // looking up the StringObject (DocId) in the live
+                // SingleSelection (which iterates the filtered
+                // FilterListModel). set_selected on a filter-backed
+                // SingleSelection silently no-ops when the requested
+                // index exceeds the post-filter n_items, so we must
+                // resolve against selection.n_items() — not the raw
+                // hits_snapshot length — and we must do it AFTER the
+                // filter.changed invalidation above so n_items
+                // reflects the new view.
+                let wanted_doc = prior_selected.clone().or_else(|| {
+                    hits_snapshot.first().map(|h| h.id.0.clone())
+                });
+                let new_idx = wanted_doc
                     .as_deref()
-                    .and_then(|want| hits_snapshot.iter().position(|h| h.id.0 == want))
-                    .map(|i| i as u32)
+                    .and_then(|want| {
+                        (0..selection.n_items()).find(|&i| {
+                            selection
+                                .item(i)
+                                .and_then(|o| o.downcast::<gtk::StringObject>().ok())
+                                .map(|s| s.string() == want)
+                                .unwrap_or(false)
+                        })
+                    })
                     .unwrap_or(0);
-                selection.set_selected(new_idx);
-                list_view.scroll_to(new_idx, gtk::ListScrollFlags::NONE, None);
+                if selection.n_items() > 0 {
+                    selection.set_selected(new_idx);
+                    list_view.scroll_to(new_idx, gtk::ListScrollFlags::NONE, None);
+                }
             }
 
             if let Some(calc) = calc_snapshot.as_ref() {
