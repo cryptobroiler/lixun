@@ -141,43 +141,37 @@ fn build_from_hit_fields(hit: &Hit) -> gtk::Widget {
     vbox.set_margin_end(16);
     vbox.add_css_class("lixun-preview-email");
 
-    let grid = gtk::Grid::new();
-    grid.set_row_spacing(4);
-    grid.set_column_spacing(12);
-    grid.add_css_class("lixun-preview-email-headers");
+    // Skip Subject (already in preview-bin's main header as `title`)
+    // and From (already as `subtitle`). Showing them again here is
+    // visual duplication that triggered the BUG-4 followup. Only
+    // surface headers that the main preview header does NOT carry —
+    // today that's just the recipients list.
+    if let Some(recipients) = hit.recipients.as_deref().filter(|s| !s.is_empty()) {
+        let grid = gtk::Grid::new();
+        grid.set_row_spacing(4);
+        grid.set_column_spacing(12);
+        grid.add_css_class("lixun-preview-email-headers");
 
-    let rows: [(&str, String); 3] = [
-        (
-            "From",
-            hit.sender.clone().unwrap_or_else(|| "(unknown)".into()),
-        ),
-        (
-            "To",
-            hit.recipients.clone().unwrap_or_else(|| "(unknown)".into()),
-        ),
-        ("Subject", hit.title.clone()),
-    ];
-
-    for (row_idx, (label, value)) in rows.iter().enumerate() {
-        let key = gtk::Label::new(Some(label));
+        let key = gtk::Label::new(Some("To"));
         key.set_xalign(1.0);
         key.add_css_class("lixun-preview-email-header-key");
-        grid.attach(&key, 0, row_idx as i32, 1, 1);
+        grid.attach(&key, 0, 0, 1, 1);
 
-        let val = gtk::Label::new(Some(value));
+        let val = gtk::Label::new(Some(recipients));
         val.set_xalign(0.0);
         val.set_selectable(true);
         val.set_wrap(true);
         val.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         val.add_css_class("lixun-preview-email-header-value");
-        grid.attach(&val, 1, row_idx as i32, 1, 1);
-    }
-    vbox.append(&grid);
+        grid.attach(&val, 1, 0, 1, 1);
 
-    let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
-    separator.set_margin_top(8);
-    separator.set_margin_bottom(8);
-    vbox.append(&separator);
+        vbox.append(&grid);
+
+        let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+        separator.set_margin_top(8);
+        separator.set_margin_bottom(8);
+        vbox.append(&separator);
+    }
 
     let body_text = hit
         .body
