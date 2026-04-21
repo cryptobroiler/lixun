@@ -60,6 +60,13 @@ systemctl --user enable --now lixund.service
 `zstd`, `sqlite`.
 **Optional (extraction):** `libreoffice-fresh` (docx/xlsx/pptx),
 `catdoc` or `antiword` (legacy .doc).
+**Optional (preview):** `gst-plugins-base`, `gst-plugins-good`,
+`gst-libav` — required for the preview pane's audio/video plugin
+and for animated GIF/WebP rendering in the image plugin. On Arch
+all three are in `extra/`. Without them, preview still works for
+text/code/pdf/email/office/static-image content, but the av plugin
+cannot decode MP3/MP4/etc. and animated images silently render as
+blank paintables.
 
 ---
 
