@@ -7,10 +7,16 @@
 /* ----- Main window -----
    Only the Top edge is anchored in layer-shell (see window.rs); the
    compositor centers horizontally when Left/Right are unanchored.
-   Actual width/height come from [gui] config percentages of the
-   monitor, applied via window.set_default_size + set_size_request
-   before present. Absolute minimums below guard against pathological
-   tiny monitors (sub-1000 px) where even 40% could be unusable. */
+   Width comes from [gui] config via window.set_default_size, with a
+   horizontal floor below for pathological narrow monitors.
+
+   NO min-height: the window surface must size to content so the
+   empty-query state (entry only, results pane hidden) collapses to
+   a Spotlight-style single-row launcher. A min-height here pins the
+   surface at that height regardless of hidden children, which
+   resurrects the exact bug fixed by commit 04fb2ad. See also
+   scrolled.vexpand(false) on the initial ScrolledWindow builder in
+   window.rs for the same reason. */
 .lixun-window {
     background: rgba(28, 28, 32, 0.92);
     border-radius: 14px;
@@ -18,7 +24,6 @@
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7),
                 0 8px 16px rgba(0, 0, 0, 0.5);
     min-width: 480px;
-    min-height: 400px;
 }
 
 /* ----- Search entry ----- */
