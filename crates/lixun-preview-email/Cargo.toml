@@ -1,0 +1,18 @@
+[package]
+name = "lixun-preview-email"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lixun-core = { path = "../lixun-core" }
+lixun-preview = { path = "../lixun-preview" }
+anyhow.workspace = true
+inventory.workspace = true
+tracing.workspace = true
+gtk = { package = "gtk4", version = "0.9", features = ["v4_12"] }
+mail-parser = "0.9"
+html2text = "0.12"
+
+[lib]
+name = "lixun_preview_email"
+path = "src/lib.rs"
