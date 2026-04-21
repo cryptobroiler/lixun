@@ -305,8 +305,12 @@ pub(crate) fn install_keyboard_handler(
     ));
     window.add_controller(key_controller);
 
-    // Entry-level key controller for history navigation when entry is focused and empty
+    // Entry-level key controller for history navigation when entry is focused and empty.
+    // Capture phase so we run BEFORE GtkText's built-in Up/Down handler (which
+    // in a single-line GtkEntry is a no-op but still stops propagation,
+    // preventing a default Bubble-phase controller from ever seeing the key).
     let entry_key_controller = gtk::EventControllerKey::new();
+    entry_key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
     entry_key_controller.connect_key_pressed(clone!(
         #[strong] entry,
         #[strong] selection,
