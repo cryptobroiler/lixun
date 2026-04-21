@@ -39,6 +39,10 @@ pub(crate) fn with_cached_hits<R>(f: impl FnOnce(&[Hit]) -> R) -> R {
     CACHED_HITS.with(|c| f(&c.borrow()))
 }
 
+pub(crate) fn clear_cached_hits() {
+    CACHED_HITS.with(|c| c.borrow_mut().clear());
+}
+
 pub(crate) fn update_results(model: &gtk::StringList, hits: &[Hit]) {
     let n = model.n_items();
     for _ in 0..n {

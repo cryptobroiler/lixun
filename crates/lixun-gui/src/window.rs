@@ -17,7 +17,9 @@ use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, LayerShell};
 use lixun_core::Category;
 
-use crate::factory::{add_css_class, create_list_factory, update_results, with_cached_hits};
+use crate::factory::{
+    add_css_class, clear_cached_hits, create_list_factory, update_results, with_cached_hits,
+};
 use crate::ipc::{IpcClient, start_ipc_thread};
 use crate::status::StatusBar;
 
@@ -140,6 +142,7 @@ impl LauncherController {
             self.model.remove(0);
         }
         self.selection.set_selected(gtk::INVALID_LIST_POSITION);
+        clear_cached_hits();
 
         self.scrolled.set_visible(false);
         self.scrolled.set_vexpand(false);
