@@ -156,6 +156,16 @@ pub(crate) fn install_keyboard_handler(
                     if entry.text().is_empty() && entry_has_focus(&entry, &window) {
                         return glib::signal::Propagation::Proceed;
                     }
+                    // Defensive: no results, no list to navigate. Pin focus
+                    // in the entry so GTK's default Up/Down focus-chain
+                    // cannot warp focus to a sibling widget (the list is
+                    // hidden, chip row, etc.) leaving the user stuck in
+                    // a widget that doesn't accept printable keys.
+                    // BUG-5 regression guard.
+                    if filter_model.n_items() == 0 {
+                        entry.grab_focus();
+                        return glib::signal::Propagation::Stop;
+                    }
                     let entry_had_focus = entry_has_focus(&entry, &window);
                     if ctrl {
                         jump_to_next_category(&selection, &filter_model, -1);
@@ -182,6 +192,11 @@ pub(crate) fn install_keyboard_handler(
                     }
                     glib::signal::Propagation::Stop
             } else if accel_matches(&keybindings.next_result, key, state) {
+                    // BUG-5 regression guard: same defensive pin as Up.
+                    if filter_model.n_items() == 0 {
+                        entry.grab_focus();
+                        return glib::signal::Propagation::Stop;
+                    }
                     let entry_had_focus = entry_has_focus(&entry, &window);
                     if ctrl {
                         jump_to_next_category(&selection, &filter_model, 1);
