@@ -69,8 +69,16 @@ impl PreviewPlugin for EmailPreview {
     fn build(&self, hit: &Hit, _cfg: &PreviewPluginCfg<'_>) -> anyhow::Result<gtk::Widget> {
         let path = match &hit.action {
             Action::OpenFile { path } | Action::ShowInFileManager { path } => path.clone(),
+            Action::OpenMail { .. } => {
+                // Gloda-indexed mail hits have no on-disk path the plugin
+                // can read — the message lives inside a Thunderbird mbox
+                // shard which only libmailnews/gloda can slice cleanly.
+                // Render what the source already gave us via Hit fields
+                // (title=subject, sender, recipients, body-snippet).
+                return Ok(build_from_hit_fields(hit));
+            }
             _ => anyhow::bail!(
-                "email plugin: hit category={:?} has no file path",
+                "email plugin: hit category={:?} has no renderable source",
                 hit.category
             ),
         };
@@ -123,6 +131,83 @@ impl PreviewPlugin for EmailPreview {
         tracing::info!("email: rendered {:?} bytes={}", path, capped.len());
         Ok(scroll.upcast())
     }
+}
+
+fn build_from_hit_fields(hit: &Hit) -> gtk::Widget {
+    let vbox = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    vbox.set_margin_top(12);
+    vbox.set_margin_bottom(12);
+    vbox.set_margin_start(16);
+    vbox.set_margin_end(16);
+    vbox.add_css_class("lixun-preview-email");
+
+    let grid = gtk::Grid::new();
+    grid.set_row_spacing(4);
+    grid.set_column_spacing(12);
+    grid.add_css_class("lixun-preview-email-headers");
+
+    let rows: [(&str, String); 3] = [
+        (
+            "From",
+            hit.sender.clone().unwrap_or_else(|| "(unknown)".into()),
+        ),
+        (
+            "To",
+            hit.recipients.clone().unwrap_or_else(|| "(unknown)".into()),
+        ),
+        ("Subject", hit.title.clone()),
+    ];
+
+    for (row_idx, (label, value)) in rows.iter().enumerate() {
+        let key = gtk::Label::new(Some(label));
+        key.set_xalign(1.0);
+        key.add_css_class("lixun-preview-email-header-key");
+        grid.attach(&key, 0, row_idx as i32, 1, 1);
+
+        let val = gtk::Label::new(Some(value));
+        val.set_xalign(0.0);
+        val.set_selectable(true);
+        val.set_wrap(true);
+        val.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        val.add_css_class("lixun-preview-email-header-value");
+        grid.attach(&val, 1, row_idx as i32, 1, 1);
+    }
+    vbox.append(&grid);
+
+    let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+    separator.set_margin_top(8);
+    separator.set_margin_bottom(8);
+    vbox.append(&separator);
+
+    let body_text = hit
+        .body
+        .clone()
+        .unwrap_or_else(|| "(body not available — gloda index stores a snippet only; open the message in Thunderbird for the full body)".into());
+    let buffer = gtk::TextBuffer::new(None);
+    buffer.set_text(&body_text);
+    let view = gtk::TextView::with_buffer(&buffer);
+    view.set_editable(false);
+    view.set_cursor_visible(false);
+    view.set_wrap_mode(gtk::WrapMode::WordChar);
+    view.set_left_margin(4);
+    view.set_right_margin(4);
+    view.add_css_class("lixun-preview-email-body");
+    vbox.append(&view);
+
+    let scroll = gtk::ScrolledWindow::new();
+    scroll.set_child(Some(&vbox));
+    scroll.set_hscrollbar_policy(gtk::PolicyType::Automatic);
+    scroll.set_vscrollbar_policy(gtk::PolicyType::Automatic);
+    scroll.set_hexpand(true);
+    scroll.set_vexpand(true);
+
+    tracing::info!(
+        "email: rendered from Hit fields (gloda path) hit_id={} body_len={}",
+        hit.id.0,
+        hit.body.as_deref().map(|s| s.len()).unwrap_or(0)
+    );
+
+    scroll.upcast()
 }
 
 fn build_header_grid(msg: &mail_parser::Message<'_>) -> gtk::Grid {
@@ -338,6 +423,9 @@ mod tests {
             score: 1.0,
             action: Action::OpenFile { path },
             extract_fail: false,
+            sender: None,
+            recipients: None,
+            body: None,
         }
     }
 
@@ -361,6 +449,9 @@ mod tests {
                 message_id: "msg-1".into(),
             },
             extract_fail: false,
+            sender: None,
+            recipients: None,
+            body: None,
         };
         assert_eq!(EmailPreview.match_score(&hit), 60);
     }
@@ -389,6 +480,9 @@ mod tests {
                 working_dir: None,
             },
             extract_fail: false,
+            sender: None,
+            recipients: None,
+            body: None,
         };
         assert_eq!(EmailPreview.match_score(&hit), 0);
     }
@@ -428,5 +522,35 @@ mod tests {
         assert_eq!(human_bytes(100), "100 B");
         assert_eq!(human_bytes(2048), "2.0 KiB");
         assert_eq!(human_bytes(5 * 1024 * 1024), "5.0 MiB");
+    }
+
+    #[test]
+    fn gloda_hit_openmail_has_no_path_but_still_matches_email_plugin() {
+        // Regression for BUG-4 (gloda preview). An OpenMail hit must
+        // score > 0 so `select_plugin` returns email-plugin, and the
+        // plugin's build() must accept this branch instead of bailing
+        // on 'no file path'. We don't exercise build() here (GTK
+        // runtime not available in unit tests) but confirm the
+        // score-side contract.
+        let hit = Hit {
+            id: DocId("mail:42".into()),
+            category: Category::Mail,
+            title: "Re: invoice #1234".into(),
+            subtitle: "alice@example.com".into(),
+            icon_name: None,
+            kind_label: Some("Email".into()),
+            score: 1.0,
+            action: Action::OpenMail {
+                message_id: "20160426103745.E36A4340033@cron001.example.com".into(),
+            },
+            extract_fail: false,
+            sender: Some("alice@example.com".into()),
+            recipients: Some("bob@example.com".into()),
+            body: Some("gloda-stored body snippet".into()),
+        };
+        assert!(
+            EmailPreview.match_score(&hit) >= 60,
+            "gloda Mail hit must score >= 60 so email plugin wins"
+        );
     }
 }

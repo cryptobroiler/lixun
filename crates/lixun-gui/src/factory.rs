@@ -70,6 +70,9 @@ pub(crate) fn synthetic_history_hits(queries: &[String]) -> Vec<Hit> {
             score: 0.0,
             action: Action::ReplaceQuery { q: q.clone() },
             extract_fail: false,
+            sender: None,
+            recipients: None,
+            body: None,
         })
         .collect()
 }

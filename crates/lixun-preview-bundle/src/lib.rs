@@ -60,6 +60,9 @@ mod tests {
                 path: PathBuf::from("/tmp/demo.txt"),
             },
             extract_fail: false,
+            sender: None,
+            recipients: None,
+            body: None,
         }
     }
 
@@ -80,6 +83,9 @@ mod tests {
                 working_dir: None,
             },
             extract_fail: false,
+            sender: None,
+            recipients: None,
+            body: None,
         }
     }
 
