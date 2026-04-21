@@ -156,6 +156,16 @@ impl GuiControl {
         for (k, v) in &env {
             cmd.env(k, v);
         }
+        // Flag the spawned GUI that its initial visibility is
+        // managed by the daemon, not by the GUI itself. Without
+        // this the GUI calls controller.show() inside
+        // build_window, races the daemon's post-spawn Toggle
+        // command (which arrives ~a few ms later, once the gui
+        // socket is bound), and toggle() then hides the window
+        // because is_visible() is already true. Net effect: the
+        // first Super+Space after a daemon restart appears to do
+        // nothing and the user has to press it twice.
+        cmd.env("LIXUN_GUI_SERVICE_SPAWN", "1");
         let mut child = cmd.spawn()?;
         let pid = child
             .id()
