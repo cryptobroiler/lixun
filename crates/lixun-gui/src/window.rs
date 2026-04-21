@@ -221,13 +221,11 @@ impl LauncherController {
         self.current_category.set(None);
         self.filter.changed(gtk::FilterChange::Different);
 
-        // Reset selection first so SingleSelection's autoselect
-        // fallback (gtksingleselection.c line 267: `position - 1`)
-        // cannot leave a stale index behind during the splice.
-        self.selection
-            .set_selected(gtk::INVALID_LIST_POSITION);
         let n = self.model.n_items();
-        self.model.splice(0, n, &[]);
+        for _ in 0..n {
+            self.model.remove(0);
+        }
+        self.selection.set_selected(gtk::INVALID_LIST_POSITION);
         clear_cached_hits();
 
         self.scrolled.set_visible(false);
@@ -557,7 +555,6 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         &entry,
         ipc.clone(),
         model.clone(),
-        selection.clone(),
         chips_rc.container.clone(),
         scrolled.clone(),
         std::rc::Rc::clone(&status_bar),
@@ -699,7 +696,6 @@ fn install_entry_handler(
     entry: &gtk::Entry,
     ipc: IpcClient,
     model: gtk::StringList,
-    selection: gtk::SingleSelection,
     chips_container: gtk::Box,
     scrolled: gtk::ScrolledWindow,
     status: std::rc::Rc<StatusBar>,
@@ -719,18 +715,10 @@ fn install_entry_handler(
         }
 
         if text.is_empty() {
-            // Invalidate the cursor BEFORE touching the model. With
-            // autoselect=true on SingleSelection, each model.remove(0)
-            // in a loop re-runs the autoselect interpolation formula
-            // and can leave `selected` pointing at some interior row
-            // that will then carry over to the next query's results.
-            // Collapsing the clear into a single splice also helps,
-            // but an explicit INVALID reset is the belt-and-braces
-            // part of the fix that makes the intent obvious at the
-            // call site.
-            selection.set_selected(gtk::INVALID_LIST_POSITION);
             let n = model.n_items();
-            model.splice(0, n, &[]);
+            for _ in 0..n {
+                model.remove(0);
+            }
             chips_container.set_visible(false);
             scrolled.set_visible(false);
             scrolled.set_vexpand(false);
