@@ -80,10 +80,25 @@ impl PreviewSpawner {
         for (k, v) in &env {
             cmd.env(k, v);
         }
-        let mut child = cmd.spawn()?;
-        let pid = child.id().ok_or_else(|| {
-            anyhow::anyhow!("spawned lixun-preview has no pid")
-        })?;
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                // Spawn failed — no child will assume tempfile ownership,
+                // so clean it up here to honour the "no leaks on error"
+                // side of Decision 11. Ignore the remove error: if the
+                // file is already gone we're done anyway.
+                let _ = std::fs::remove_file(&tempfile_path);
+                return Err(anyhow::Error::from(e)
+                    .context(format!("spawning lixun-preview with {:?}", tempfile_path)));
+            }
+        };
+        let pid = match child.id() {
+            Some(pid) => pid,
+            None => {
+                let _ = std::fs::remove_file(&tempfile_path);
+                anyhow::bail!("spawned lixun-preview has no pid");
+            }
+        };
         state.pid = Some(pid);
         tracing::info!(
             "preview_spawn: spawned lixun-preview pid={} hit_id={} hit_json={:?}",
@@ -117,7 +132,22 @@ impl PreviewSpawner {
 }
 
 fn tempfile_path() -> anyhow::Result<PathBuf> {
-    let runtime = dirs::runtime_dir().unwrap_or_else(std::env::temp_dir);
+    // Prefer XDG_RUNTIME_DIR (tmpfs, user-private, 0700 by default).
+    // If absent, fall back to a per-user subdir under /tmp and force
+    // 0700 on it so the Hit JSON — which may contain fragments of
+    // file contents — isn't world-readable during the short window
+    // it exists on disk.
+    let runtime = match dirs::runtime_dir() {
+        Some(p) => p,
+        None => {
+            let tmp_base = std::env::temp_dir()
+                .join(format!("lixun-{}", unsafe { libc::getuid() }));
+            std::fs::create_dir_all(&tmp_base)?;
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp_base, std::fs::Permissions::from_mode(0o700))?;
+            tmp_base
+        }
+    };
     std::fs::create_dir_all(&runtime)?;
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

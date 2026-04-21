@@ -190,28 +190,15 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     window.set_margin(Edge::Right, 0);
     add_css_class(&window, "lixun-window");
 
+    let display = gtk::gdk::Display::default().unwrap();
     let provider = gtk::CssProvider::new();
     provider.load_from_string(EMBEDDED_STYLESHEET);
     gtk::style_context_add_provider_for_display(
-        &gtk::gdk::Display::default().unwrap(),
+        &display,
         &provider,
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
-
-    let css_path = dirs::config_dir()
-        .map(|d| d.join("lixun/style.css"))
-        .filter(|p| p.exists());
-
-    if let Some(path) = css_path {
-        let override_provider = gtk::CssProvider::new();
-        override_provider.load_from_path(&path);
-        gtk::style_context_add_provider_for_display(
-            &gtk::gdk::Display::default().unwrap(),
-            &override_provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
-        );
-        tracing::info!("Loaded external style.css from {:?}", path);
-    }
+    lixun_preview::install_user_css(&display);
 
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 6);
     vbox.set_margin_start(16);
