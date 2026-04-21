@@ -33,7 +33,7 @@ use std::io::{BufRead, BufReader};
 
 use gtk::prelude::*;
 use lixun_core::{Action, Hit};
-use lixun_preview::{PreviewPlugin, PreviewPluginCfg, PreviewPluginEntry};
+use lixun_preview::{PreviewPlugin, PreviewPluginCfg, PreviewPluginEntry, SizingPreference};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style, Theme, ThemeSet};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
@@ -70,6 +70,10 @@ impl PreviewPlugin for CodePreview {
             return 70;
         }
         0
+    }
+
+    fn sizing(&self) -> SizingPreference {
+        SizingPreference::FitToContent
     }
 
     fn build(&self, hit: &Hit, cfg: &PreviewPluginCfg<'_>) -> anyhow::Result<gtk::Widget> {
@@ -111,7 +115,17 @@ impl PreviewPlugin for CodePreview {
         label.set_selectable(true);
         label.set_xalign(0.0);
         label.set_yalign(0.0);
+        // Code stays unwrapped — wrapping at arbitrary points breaks
+        // indentation-based reading (the whole reason to highlight).
+        // But an unwrapped Label reports natural width = widest line,
+        // which for typical source files (long comments, wide table
+        // formatters) blows past any reasonable preview cap. Pin the
+        // requested width to 100 monospace chars so the FitToContent
+        // host opens at a sensible ~800 px wide and lets horizontal
+        // scroll handle longer lines, rather than expanding the
+        // window to fit the widest line in the file.
         label.set_wrap(false);
+        label.set_width_chars(100);
         label.set_margin_top(12);
         label.set_margin_bottom(12);
         label.set_margin_start(16);
@@ -123,6 +137,12 @@ impl PreviewPlugin for CodePreview {
         scroll.set_vscrollbar_policy(gtk::PolicyType::Automatic);
         scroll.set_child(Some(&label));
         scroll.add_css_class("lixun-preview-code-scroll");
+        // See preview-text for the natural-width rationale. Code
+        // floor is the same as text because Pango's width_chars
+        // already sets a 100-char horizontal request; the min_content
+        // here just protects the vertical axis so single-line files
+        // don't produce a sliver of a window.
+        scroll.set_min_content_height(240);
 
         tracing::info!(
             "code: rendered {:?} syntax={} theme={} truncated={}",
