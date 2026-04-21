@@ -204,6 +204,38 @@ pub(crate) fn install_keyboard_handler(
                 entry.set_position(-1);
                 return glib::signal::Propagation::Stop;
             }
+            // Same contract for BACKSPACE. `is_printable_key` rejects
+            // it (Unicode U+0008 is a control char), so the block
+            // above never fires; without this branch Backspace while
+            // the list has focus hits GtkListView, which ignores it,
+            // and the user's query becomes read-only whenever the
+            // cursor is on a row. Spotlight lets you keep editing in
+            // that state; match its behaviour by deleting the last
+            // character of the query and warping focus back to the
+            // entry. Bare Backspace only — Ctrl/Alt/Super variants
+            // fall through so future word-delete accels stay
+            // available.
+            if !entry_has_focus(&entry, &window)
+                && key == gtk::gdk::Key::BackSpace
+                && !state.intersects(
+                    gtk::gdk::ModifierType::CONTROL_MASK
+                        | gtk::gdk::ModifierType::ALT_MASK
+                        | gtk::gdk::ModifierType::SUPER_MASK
+                        | gtk::gdk::ModifierType::META_MASK
+                        | gtk::gdk::ModifierType::HYPER_MASK,
+                )
+            {
+                let mut text = entry.text().to_string();
+                // Rust's String::pop is char-aware, so a cyrillic or
+                // other multibyte trailing character is removed as a
+                // single unit — we never leave the string on a non-
+                // char-boundary byte index.
+                text.pop();
+                entry.set_text(&text);
+                entry.grab_focus();
+                entry.set_position(-1);
+                return glib::signal::Propagation::Stop;
+            }
             let ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
             let shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
             if accel_matches(&keybindings.previous_result, key, state) {
