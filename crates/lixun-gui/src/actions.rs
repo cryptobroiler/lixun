@@ -193,54 +193,6 @@ pub(crate) fn execute_secondary_action(hit: &Hit) -> Result<()> {
     }
 }
 
-pub(crate) fn quick_look(hit: &Hit) -> Result<()> {
-    let preview_path = match &hit.action {
-        Action::OpenFile { path } | Action::ShowInFileManager { path } => path.clone(),
-        Action::OpenAttachment {
-            mbox_path,
-            byte_offset,
-            length,
-            encoding,
-            suggested_filename,
-            ..
-        } => extract_attachment_to_temp(
-            mbox_path,
-            *byte_offset,
-            *length,
-            encoding,
-            suggested_filename,
-        )?,
-        _ => return Ok(()),
-    };
-
-    let bin = std::env::var("LUPA_QUICK_LOOK").ok().or_else(|| {
-        ["gnome-sushi", "sushi"]
-            .iter()
-            .find_map(|name| which(name).map(|_| (*name).to_string()))
-    });
-
-    if let Some(cmd) = bin {
-        std::process::Command::new(&cmd)
-            .arg(&preview_path)
-            .spawn()?;
-    } else {
-        let uri = gio::File::for_path(&preview_path).uri();
-        gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>)?;
-    }
-    Ok(())
-}
-
-fn which(name: &str) -> Option<std::path::PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path_var) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
 fn extract_attachment_to_temp(
     mbox_path: &std::path::Path,
     byte_offset: u64,
