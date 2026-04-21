@@ -142,8 +142,10 @@ fn build_preview_window(
         window.set_monitor(Some(&monitor));
         let geometry = monitor.geometry();
         let w = (geometry.width() * i32::from(gui_cfg.preview_width_percent) / 100)
+            .min(gui_cfg.preview_max_width_px)
             .max(MIN_WIDTH);
         let h = (geometry.height() * i32::from(gui_cfg.preview_height_percent) / 100)
+            .min(gui_cfg.preview_max_height_px)
             .max(MIN_HEIGHT);
         window.set_default_size(w, h);
     }

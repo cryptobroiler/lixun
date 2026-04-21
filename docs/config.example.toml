@@ -280,10 +280,21 @@ global_toggle = "Super+space"
 # width_percent = 40
 # height_percent = 60
 
+# Absolute pixel caps. `min(percent * monitor, max_px)` wins —
+# matches macOS Spotlight, which keeps the launcher ≈ 680 pt wide
+# even on a 6K display. Defaults 900×800 for the launcher.
+# max_width_px = 900
+# max_height_px = 800
+
 # Preview window percentages (separate from launcher — preview shows
 # full documents and media, so 80/80 is a sensible default).
 # preview_width_percent = 80
 # preview_height_percent = 80
+
+# Preview caps. Default 2000×1400 — Quick Look-style ceiling that
+# stops preview from being unreadably large on big monitors.
+# preview_max_width_px = 2000
+# preview_max_height_px = 1400
 
 # ============================================================
 # Preview subsystem
