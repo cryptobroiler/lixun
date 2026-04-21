@@ -53,6 +53,13 @@ pub enum Request {
     RecordClick { doc_id: String },
     RecordQuery { q: String },
     SearchHistory { limit: u32 },
+    /// Open a preview window for the given hit. The GUI embeds the
+    /// full Hit rather than a DocId because app / calculator /
+    /// recent-query hits never reach Tantivy and so cannot be
+    /// resolved from an id alone. The daemon writes the Hit to a
+    /// tempfile and spawns `lixun-preview` with `--hit-json <path>`.
+    /// Boxed to keep the `Request` enum compact.
+    Preview { hit: Box<Hit> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -361,5 +368,71 @@ mod tests {
         let json = serde_json::to_vec(&resp).unwrap();
         let decoded: Response = serde_json::from_slice(&json).unwrap();
         assert!(matches!(decoded, Response::Hits(h) if h.is_empty()));
+    }
+
+    fn fake_hit() -> Hit {
+        use lixun_core::{Action, Category, DocId};
+        Hit {
+            id: DocId("fs:/tmp/demo.txt".into()),
+            category: Category::File,
+            title: "demo.txt".into(),
+            subtitle: "/tmp".into(),
+            icon_name: None,
+            kind_label: Some("Plain text".into()),
+            score: 1.0,
+            action: Action::OpenFile {
+                path: "/tmp/demo.txt".into(),
+            },
+            extract_fail: false,
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_preview_roundtrips_full_hit() {
+        let mut codec = FrameCodec::default();
+        let mut buf = BytesMut::new();
+        let req = Request::Preview {
+            hit: Box::new(fake_hit()),
+        };
+        codec.encode(req, &mut buf).unwrap();
+
+        let decoded = codec.decode(&mut buf).unwrap().unwrap();
+        match decoded {
+            Request::Preview { hit } => {
+                assert_eq!(hit.id.0, "fs:/tmp/demo.txt");
+                assert_eq!(hit.title, "demo.txt");
+                assert!(matches!(hit.action, lixun_core::Action::OpenFile { .. }));
+            }
+            other => panic!("Expected Preview variant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_preview_interleaved_with_other_variants() {
+        let mut codec = FrameCodec::default();
+        let mut buf = BytesMut::new();
+        codec.encode(Request::Toggle, &mut buf).unwrap();
+        codec
+            .encode(
+                Request::Preview {
+                    hit: Box::new(fake_hit()),
+                },
+                &mut buf,
+            )
+            .unwrap();
+        codec.encode(Request::Status, &mut buf).unwrap();
+
+        assert!(matches!(
+            codec.decode(&mut buf).unwrap().unwrap(),
+            Request::Toggle
+        ));
+        assert!(matches!(
+            codec.decode(&mut buf).unwrap().unwrap(),
+            Request::Preview { .. }
+        ));
+        assert!(matches!(
+            codec.decode(&mut buf).unwrap().unwrap(),
+            Request::Status
+        ));
     }
 }

@@ -550,6 +550,9 @@ async fn handle_client(
             let log = query_log.read().await;
             Response::Queries(log.recent(limit as usize))
         }
+        Request::Preview { hit: _ } => {
+            Response::Error("preview dispatch not yet implemented (G2.8 commit 5)".into())
+        }
     };
 
     let json = serde_json::to_vec(&resp)?;
