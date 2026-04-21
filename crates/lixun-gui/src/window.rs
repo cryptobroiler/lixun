@@ -689,11 +689,28 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     });
     window.add_controller(focus_ctrl);
 
-    controller.show();
+    // In daemon-spawned (service) mode the GUI must start hidden
+    // and wait for the daemon's first command. Calling show() here
+    // unconditionally would race the post-spawn Toggle that the
+    // daemon sends as soon as wait_for_ready resolves: the window
+    // is already visible by that point, Toggle inspects
+    // is_visible()=true and hides it, and the user has to press
+    // Super+Space a second time to get the launcher up. The
+    // daemon flags this mode via LIXUN_GUI_SERVICE_SPAWN=1 (see
+    // lixun-daemon/src/gui_control.rs spawn()).
+    //
+    // Standalone launches (`lixun-gui` from a terminal for CSS
+    // inspection or dev work, no daemon) have the variable unset,
+    // so the old "show myself immediately" behaviour is
+    // preserved. README documents GTK_DEBUG=interactive lixun-gui,
+    // that still works.
+    if std::env::var_os("LIXUN_GUI_SERVICE_SPAWN").is_none() {
+        controller.show();
+    }
 
     crate::gui_server::start(std::rc::Rc::clone(&controller))?;
 
-    tracing::info!("Lixun GUI window shown");
+    tracing::info!("Lixun GUI window built");
     Ok(())
 }
 
