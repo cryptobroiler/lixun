@@ -34,6 +34,8 @@ struct ConfigToml {
 struct GuiToml {
     width_percent: Option<u8>,
     height_percent: Option<u8>,
+    preview_width_percent: Option<u8>,
+    preview_height_percent: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -155,14 +157,21 @@ pub struct Config {
     pub plugin_sections: BTreeMap<String, toml::Value>,
 }
 
-/// Launcher window sizing policy. Percentages are of the monitor
-/// the launcher opens on (resolved at window-build time). Values
-/// outside 10-95 are clamped — a 5% window is unusable, and 100%
-/// covers the entire monitor with no breathing room.
+/// Launcher + preview window sizing policy. Percentages are of the
+/// monitor the window opens on (resolved at window-build time).
+/// Values outside 10-95 are clamped — a 5% window is unusable, and
+/// 100% covers the entire monitor with no breathing room.
+///
+/// Launcher and preview have separate percentages because they have
+/// different UX expectations: the launcher is a narrow Spotlight-
+/// style entry that lists results, the preview pane needs room to
+/// show whole documents and media at legible size.
 #[derive(Debug, Clone)]
 pub struct GuiConfig {
     pub width_percent: u8,
     pub height_percent: u8,
+    pub preview_width_percent: u8,
+    pub preview_height_percent: u8,
 }
 
 impl Default for GuiConfig {
@@ -170,6 +179,8 @@ impl Default for GuiConfig {
         Self {
             width_percent: 40,
             height_percent: 60,
+            preview_width_percent: 80,
+            preview_height_percent: 80,
         }
     }
 }
@@ -357,6 +368,12 @@ impl Config {
             }
             if let Some(v) = gui.height_percent {
                 cfg.gui.height_percent = v.clamp(10, 95);
+            }
+            if let Some(v) = gui.preview_width_percent {
+                cfg.gui.preview_width_percent = v.clamp(10, 95);
+            }
+            if let Some(v) = gui.preview_height_percent {
+                cfg.gui.preview_height_percent = v.clamp(10, 95);
             }
         }
 

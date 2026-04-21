@@ -33,8 +33,6 @@ const DEFAULT_WIDTH: i32 = 960;
 const DEFAULT_HEIGHT: i32 = 720;
 const MIN_WIDTH: i32 = 600;
 const MIN_HEIGHT: i32 = 400;
-const SCREEN_FRACTION_NUM: i32 = 8;
-const SCREEN_FRACTION_DEN: i32 = 10;
 const FOCUS_LEAVE_LATCH: Duration = Duration::from_millis(150);
 
 #[derive(Parser, Debug)]
@@ -65,6 +63,7 @@ fn main() -> Result<()> {
 
     let daemon_cfg = lixun_daemon::config::Config::load()?;
     let preview_cfg = Rc::new(daemon_cfg.preview);
+    let gui_cfg = Rc::new(daemon_cfg.gui);
     let hit = Rc::new(hit);
 
     let app = gtk::Application::new(Some(APP_ID), ApplicationFlags::NON_UNIQUE);
@@ -72,8 +71,9 @@ fn main() -> Result<()> {
     {
         let hit = Rc::clone(&hit);
         let preview_cfg = Rc::clone(&preview_cfg);
+        let gui_cfg = Rc::clone(&gui_cfg);
         app.connect_activate(move |app| {
-            if let Err(e) = build_preview_window(app, &hit, &preview_cfg) {
+            if let Err(e) = build_preview_window(app, &hit, &preview_cfg, &gui_cfg) {
                 tracing::error!("preview: build_preview_window failed: {}", e);
                 app.quit();
             }
@@ -101,6 +101,7 @@ fn build_preview_window(
     app: &gtk::Application,
     hit: &Hit,
     preview_cfg: &lixun_daemon::config::PreviewConfig,
+    gui_cfg: &lixun_daemon::config::GuiConfig,
 ) -> Result<()> {
     let Some(plugin) = select_plugin(hit) else {
         tracing::info!(
@@ -140,8 +141,10 @@ fn build_preview_window(
     if let Some(monitor) = pick_monitor(&display) {
         window.set_monitor(Some(&monitor));
         let geometry = monitor.geometry();
-        let w = (geometry.width() * SCREEN_FRACTION_NUM / SCREEN_FRACTION_DEN).max(MIN_WIDTH);
-        let h = (geometry.height() * SCREEN_FRACTION_NUM / SCREEN_FRACTION_DEN).max(MIN_HEIGHT);
+        let w = (geometry.width() * i32::from(gui_cfg.preview_width_percent) / 100)
+            .max(MIN_WIDTH);
+        let h = (geometry.height() * i32::from(gui_cfg.preview_height_percent) / 100)
+            .max(MIN_HEIGHT);
         window.set_default_size(w, h);
     }
 
