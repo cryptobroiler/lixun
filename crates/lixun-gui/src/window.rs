@@ -33,6 +33,9 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         .default_width(720)
         .decorated(false)
         .build();
+    // Widget names are the stable CSS id anchors documented in
+    // `docs/style.example.css`. Keep them in sync with that file.
+    window.set_widget_name("lixun-root");
 
     window.init_layer_shell();
     window.set_layer(gtk4_layer_shell::Layer::Overlay);
@@ -102,6 +105,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         .placeholder_text("Search\u{2026}")
         .hexpand(true)
         .build();
+    entry.set_widget_name("lixun-entry");
     add_css_class(&entry, "lixun-entry");
     vbox.append(&entry);
 
@@ -115,6 +119,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         .min_content_height(320)
         .max_content_height(520)
         .build();
+    scrolled.set_widget_name("lixun-results-scroll");
     add_css_class(&scrolled, "lixun-results");
     scrolled.set_visible(false);
     vbox.append(&scrolled);
@@ -151,6 +156,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         .model(&selection)
         .factory(&create_list_factory())
         .build();
+    list_view.set_widget_name("lixun-results");
     scrolled.set_child(Some(&list_view));
 
     chips.wire_toggle({
@@ -330,6 +336,7 @@ impl CategoryChips {
 
 fn build_category_chips(current: &CategoryFilter) -> CategoryChips {
     let container = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    container.set_widget_name("lixun-chips");
     container.set_margin_top(4);
     container.set_margin_bottom(2);
     add_css_class(&container, "lixun-chips");

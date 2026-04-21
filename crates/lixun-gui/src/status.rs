@@ -15,11 +15,13 @@ pub(crate) struct StatusBar {
 impl StatusBar {
     pub(crate) fn new() -> Self {
         let revealer = gtk::Revealer::new();
+        revealer.set_widget_name("lixun-status");
         revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
         revealer.set_transition_duration(200);
         revealer.set_reveal_child(false);
 
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        content.set_widget_name("lixun-status-inner");
         content.set_margin_top(6);
         content.set_margin_bottom(6);
         content.set_margin_start(8);

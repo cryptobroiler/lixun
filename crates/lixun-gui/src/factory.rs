@@ -265,6 +265,7 @@ pub(crate) fn create_list_factory() -> gtk::SignalListItemFactory {
 
     factory.connect_setup(move |_, list_item| {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        row.set_widget_name("lixun-hit");
         add_css_class(&row, "lixun-hit");
 
         let icon = gtk::Image::new();
