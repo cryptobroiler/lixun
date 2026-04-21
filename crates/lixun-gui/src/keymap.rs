@@ -196,7 +196,13 @@ pub(crate) fn install_keyboard_handler(
                         jump_to_next_category(&selection, &filter_model, -1);
                         let target = selection.selected();
                         if target != gtk::INVALID_LIST_POSITION {
-                            list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
+                            let scroll_info = gtk::ScrollInfo::new();
+                            scroll_info.set_enable_vertical(true);
+                            list_view.scroll_to(
+                                target,
+                                gtk::ListScrollFlags::FOCUS,
+                                Some(scroll_info),
+                            );
                         }
                         if entry_had_focus {
                             list_view.grab_focus();
@@ -207,7 +213,9 @@ pub(crate) fn install_keyboard_handler(
                     if current > 0 {
                         let target = current - 1;
                         selection.set_selected(target);
-                        list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
+                        let scroll_info = gtk::ScrollInfo::new();
+                        scroll_info.set_enable_vertical(true);
+                        list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, Some(scroll_info));
                         if entry_had_focus {
                             list_view.grab_focus();
                         }
@@ -227,7 +235,13 @@ pub(crate) fn install_keyboard_handler(
                         jump_to_next_category(&selection, &filter_model, 1);
                         let target = selection.selected();
                         if target != gtk::INVALID_LIST_POSITION {
-                            list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
+                            let scroll_info = gtk::ScrollInfo::new();
+                            scroll_info.set_enable_vertical(true);
+                            list_view.scroll_to(
+                                target,
+                                gtk::ListScrollFlags::FOCUS,
+                                Some(scroll_info),
+                            );
                         }
                         if entry_had_focus {
                             list_view.grab_focus();
@@ -239,7 +253,9 @@ pub(crate) fn install_keyboard_handler(
                     if current + 1 < n {
                         let target = current + 1;
                         selection.set_selected(target);
-                        list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
+                        let scroll_info = gtk::ScrollInfo::new();
+                        scroll_info.set_enable_vertical(true);
+                        list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, Some(scroll_info));
                     }
                     if entry_had_focus && n > 0 {
                         list_view.grab_focus();
