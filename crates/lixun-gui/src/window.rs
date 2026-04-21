@@ -555,6 +555,7 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
         &entry,
         ipc.clone(),
         model.clone(),
+        selection.clone(),
         chips_rc.container.clone(),
         scrolled.clone(),
         std::rc::Rc::clone(&status_bar),
@@ -696,6 +697,7 @@ fn install_entry_handler(
     entry: &gtk::Entry,
     ipc: IpcClient,
     model: gtk::StringList,
+    selection: gtk::SingleSelection,
     chips_container: gtk::Box,
     scrolled: gtk::ScrolledWindow,
     status: std::rc::Rc<StatusBar>,
@@ -715,10 +717,19 @@ fn install_entry_handler(
         }
 
         if text.is_empty() {
+            // Disable autoselect around the bulk clear so
+            // SingleSelection's interpolation formula
+            // (gtksingleselection.c:253-296) does not drift the
+            // selected index toward the end of the list on every
+            // per-row items-changed emission. Re-enable after the
+            // clear and pin selection to INVALID explicitly.
+            selection.set_autoselect(false);
             let n = model.n_items();
             for _ in 0..n {
                 model.remove(0);
             }
+            selection.set_selected(gtk::INVALID_LIST_POSITION);
+            selection.set_autoselect(true);
             chips_container.set_visible(false);
             scrolled.set_visible(false);
             scrolled.set_vexpand(false);
