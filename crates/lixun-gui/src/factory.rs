@@ -44,7 +44,22 @@ pub(crate) fn clear_cached_hits() {
     CACHED_HITS.with(|c| c.borrow_mut().clear());
 }
 
-pub(crate) fn update_results(model: &gtk::StringList, hits: &[Hit]) {
+/// Replace every row in `model` with rows derived from `hits`.
+/// Disables `selection.autoselect` for the duration of the churn so
+/// SingleSelection's interpolation formula (gtksingleselection.c
+/// line 253-296) cannot drift the cursor on the per-row
+/// items-changed emissions; callers are expected to set the
+/// desired selection index themselves after this function returns,
+/// or to pin it via `set_selected(INVALID_LIST_POSITION)` if they
+/// want a blank state.
+pub(crate) fn update_results(
+    model: &gtk::StringList,
+    selection: &gtk::SingleSelection,
+    hits: &[Hit],
+) {
+    let prev_autoselect = selection.is_autoselect();
+    selection.set_autoselect(false);
+
     let n = model.n_items();
     for _ in 0..n {
         model.remove(0);
@@ -53,6 +68,8 @@ pub(crate) fn update_results(model: &gtk::StringList, hits: &[Hit]) {
     for hit in hits {
         model.append(&hit.id.0);
     }
+
+    selection.set_autoselect(prev_autoselect);
 }
 
 pub(crate) fn synthetic_history_hits(queries: &[String]) -> Vec<Hit> {

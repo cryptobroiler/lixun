@@ -311,7 +311,7 @@ impl LauncherController {
 
         *self.last_query.borrow_mut() = snapshot.query.clone();
 
-        update_results(&self.model, &snapshot.hits);
+        update_results(&self.model, &self.selection, &snapshot.hits);
         self.filter.changed(gtk::FilterChange::Different);
 
         let selected_idx = snapshot
@@ -650,7 +650,7 @@ fn install_response_poller(
                 let mut c = calculation.lock().unwrap();
                 c.take()
             };
-            update_results(&model, &hits_snapshot);
+            update_results(&model, &selection, &hits_snapshot);
             filter.changed(gtk::FilterChange::Different);
             if !hits_snapshot.is_empty() {
                 let new_idx = prior_selected
