@@ -438,22 +438,30 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
 
     let display = gtk::gdk::Display::default().unwrap();
 
-    // Resolve window size as a percentage of the primary monitor.
-    // The launcher opens on the monitor containing the pointer at
-    // spawn time, but at this point we don't know which monitor —
-    // `window.monitor()` returns None until present(). Use the
-    // first monitor as a reasonable default; if the user has
-    // wildly different monitor sizes this will still look correct
-    // within each monitor's proportions because the CSS min-width
-    // / min-height act as absolute floors.
+    // Resolve window WIDTH as a percentage of the primary monitor.
+    // Height is deliberately NOT pinned here: layer-shell surface
+    // anchored only on Top sizes to content, which is the whole
+    // point of the Spotlight-style empty-query collapse (G0.2 in
+    // gui-ux-v1). Any set_size_request / set_default_size with a
+    // height arg forces a minimum surface height and defeats the
+    // collapse — exactly the regression fixed here after commit
+    // 708cb69 had introduced it via monitor-relative sizing.
+    //
+    // The config's height_percent / max_height_px are instead
+    // applied to the inner ScrolledWindow as
+    // max_content_height (see below), so the results list has a
+    // vertical cap without pinning the outer surface.
+    let gui_max_content_height: i32;
     if let Some(monitor) = display.monitors().item(0).and_downcast::<gtk::gdk::Monitor>() {
         let geom = monitor.geometry();
         let w = (geom.width() * i32::from(daemon_config.gui.width_percent) / 100)
             .min(daemon_config.gui.max_width_px);
         let h = (geom.height() * i32::from(daemon_config.gui.height_percent) / 100)
             .min(daemon_config.gui.max_height_px);
-        window.set_default_size(w, h);
-        window.set_size_request(w, h);
+        window.set_default_size(w, -1);
+        gui_max_content_height = h;
+    } else {
+        gui_max_content_height = daemon_config.gui.max_height_px;
     }
 
     let provider = gtk::CssProvider::new();
@@ -487,19 +495,44 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     chips.container.set_visible(false);
     vbox.append(&chips.container);
 
-    // Scrolled size policy lives in CSS (.lixun-results min-height)
-    // to keep all layout tuning in one place. Avoid hardcoding
-    // content height here — CSS wins anyway via GTK's cascade.
+    // ScrolledWindow size policy.
     //
-    // vexpand(false) on the INITIAL builder is load-bearing: the
-    // widget is hidden on fresh spawn and on empty-query state
-    // (set_visible(false) below), but a vexpand(true) child still
-    // influences the layer-shell surface's size request on the
-    // first layout pass, briefly claiming vertical space and
-    // defeating the empty-query collapse. Visibility branches
-    // below flip vexpand to true when results are actually shown.
-    // See commit 04fb2ad for the original fix.
-    let scrolled = gtk::ScrolledWindow::builder().vexpand(false).build();
+    // This is the canonical GTK4 recipe for a Spotlight-style
+    // collapsing list (verified against Walker, Sherlock, Ironbar
+    // launchers and confirmed from gtkscrolledwindow.c measure
+    // impl):
+    //
+    //   propagate_natural_height(true) — child's natural height
+    //       feeds the ScrolledWindow's natural request (without
+    //       this, max_content_height is silently ignored; see
+    //       CLAMP in gtkscrolledwindow.c vfunc_measure).
+    //
+    //   min_content_height(0) — natural/min height can collapse
+    //       all the way to 0 when the ListView has no rows, so a
+    //       `set_visible(false)` on the empty-query state actually
+    //       zeroes the surface height instead of leaving a
+    //       scrollbar-sized gap.
+    //
+    //   max_content_height(gui_max_content_height) — caps the
+    //       surface from above using the value we used to pass to
+    //       the window's set_size_request. vexpand + this cap
+    //       compose as min(available, cap, natural), so the list
+    //       grows with hits up to the cap, then starts scrolling.
+    //
+    //   vexpand(true) — works correctly now because the cap above
+    //       bounds the request. (Earlier builds had vexpand(false)
+    //       as a workaround because max-cap was missing, which in
+    //       turn masked a separate set_size_request bug.)
+    //
+    // Without all four, either the collapse breaks (no propagate
+    // or non-zero min) or the window stretches past max_height_px
+    // (no cap).
+    let scrolled = gtk::ScrolledWindow::builder()
+        .vexpand(true)
+        .propagate_natural_height(true)
+        .min_content_height(0)
+        .max_content_height(gui_max_content_height)
+        .build();
     scrolled.set_widget_name("lixun-results-scroll");
     add_css_class(&scrolled, "lixun-results");
     scrolled.set_visible(false);
