@@ -17,7 +17,7 @@ use std::path::Path;
 
 use gtk::prelude::*;
 use lixun_core::{Action, Hit};
-use lixun_preview::{PreviewPlugin, PreviewPluginCfg, PreviewPluginEntry};
+use lixun_preview::{PreviewPlugin, PreviewPluginCfg, PreviewPluginEntry, SizingPreference};
 
 const DISPLAY_CAP_BYTES: usize = 50 * 1024;
 const SNIFF_BYTES: usize = 4 * 1024;
@@ -128,6 +128,10 @@ impl PreviewPlugin for TextPreview {
         0
     }
 
+    fn sizing(&self) -> SizingPreference {
+        SizingPreference::FitToContent
+    }
+
     fn build(&self, hit: &Hit, _cfg: &PreviewPluginCfg<'_>) -> anyhow::Result<gtk::Widget> {
         let path = match &hit.action {
             Action::OpenFile { path } | Action::ShowInFileManager { path } => path.clone(),
@@ -166,6 +170,14 @@ impl PreviewPlugin for TextPreview {
         let scroll = gtk::ScrolledWindow::new();
         scroll.set_hscrollbar_policy(gtk::PolicyType::Automatic);
         scroll.set_vscrollbar_policy(gtk::PolicyType::Automatic);
+        // TextView with word-wrap reports natural width = 0 because
+        // it is content to wrap arbitrarily narrow. Without a floor
+        // the shrink-to-fit host would open the window at MIN_WIDTH
+        // regardless of content. Ask for a comfortable reading width
+        // (~80 monospace chars) as the lower bound; the content can
+        // still push upward via propagate_natural_width on the host.
+        scroll.set_min_content_width(640);
+        scroll.set_min_content_height(240);
         scroll.set_child(Some(&view));
         scroll.add_css_class("lixun-preview-text-scroll");
 
