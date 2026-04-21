@@ -24,27 +24,41 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lixun_core::Hit;
+use lixun_ipc::gui::GuiCommand;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
+use crate::gui_control::GuiControl;
 use crate::session_env;
 
 const TERMINATE_GRACE: Duration = Duration::from_millis(200);
 const KILL_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// Exit code the preview binary uses when the user launched the
+/// hit's default application from within the preview (Enter, Open
+/// button). Kept in sync with `EXIT_CODE_LAUNCHED` in
+/// `lixun-preview-bin`'s main.rs — that crate owns the value, this
+/// constant mirrors it. Any other exit (0 = plain close, non-zero
+/// crash, killed by signal) means the user dismissed the preview
+/// without launching, and the launcher should reappear.
+const PREVIEW_EXIT_CODE_LAUNCHED: i32 = 42;
 
 #[derive(Default)]
 struct PreviewState {
     pid: Option<u32>,
 }
 
-#[derive(Default)]
 pub struct PreviewSpawner {
     state: Arc<Mutex<PreviewState>>,
+    gui_control: Arc<GuiControl>,
 }
 
 impl PreviewSpawner {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(gui_control: Arc<GuiControl>) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(PreviewState::default())),
+            gui_control,
+        }
     }
 
     /// Dispatch a new preview for `hit`. If a previous preview is
@@ -119,22 +133,54 @@ impl PreviewSpawner {
         );
 
         let state_arc = Arc::clone(&self.state);
+        let gui_control = Arc::clone(&self.gui_control);
         tokio::spawn(async move {
             let status = child.wait().await;
+            // Decide whether the preview closed because the user
+            // completed the task (launched the file → exit 42) or
+            // because they dismissed it (Escape/Space/focus-loss →
+            // exit 0, or a crash/signal). On dismissal we re-show
+            // the launcher so its persisted session state becomes
+            // visible again — the Spotlight cycle is
+            // launcher → preview → back-to-launcher.
+            let launched = matches!(
+                &status,
+                Ok(s) if s.code() == Some(PREVIEW_EXIT_CODE_LAUNCHED)
+            );
             match &status {
-                Ok(s) if !s.success() => {
+                Ok(s) if !s.success() && !launched => {
                     tracing::warn!("preview_spawn: pid={} exited {:?}", pid, s);
                 }
                 Ok(s) => {
-                    tracing::debug!("preview_spawn: pid={} exited ok {:?}", pid, s);
+                    tracing::debug!(
+                        "preview_spawn: pid={} exited {:?} launched={}",
+                        pid,
+                        s,
+                        launched
+                    );
                 }
                 Err(e) => {
                     tracing::warn!("preview_spawn: pid={} wait failed: {}", pid, e);
                 }
             }
-            let mut s = state_arc.lock().await;
-            if s.pid == Some(pid) {
-                s.pid = None;
+            {
+                let mut s = state_arc.lock().await;
+                if s.pid == Some(pid) {
+                    s.pid = None;
+                }
+            }
+            if !launched {
+                match gui_control.dispatch(GuiCommand::Show).await {
+                    Ok(_) => tracing::debug!(
+                        "preview_spawn: re-shown launcher after preview pid={} closed",
+                        pid
+                    ),
+                    Err(e) => tracing::warn!(
+                        "preview_spawn: failed to re-show launcher after preview pid={}: {}",
+                        pid,
+                        e
+                    ),
+                }
             }
         });
 
