@@ -20,6 +20,7 @@ members = [
     "crates/lixun-preview-pdf",
     "crates/lixun-preview-code",
     "crates/lixun-preview-email",
+    "crates/lixun-preview-office",
 ]
 resolver = "2"
 
