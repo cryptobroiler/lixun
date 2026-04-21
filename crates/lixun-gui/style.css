@@ -4,13 +4,18 @@
    are only partially honored by GtkCssProvider, so we use hardcoded values
    below but group them visually for maintainability). ----- */
 
-/* ----- Main window ----- */
+/* ----- Main window -----
+   Fixed width + min-height drive the Spotlight-like proportions.
+   Only the Top edge is anchored in layer-shell (see window.rs); the
+   compositor centers horizontally when Left/Right are unanchored. */
 .lixun-window {
     background: rgba(28, 28, 32, 0.92);
     border-radius: 14px;
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7),
                 0 8px 16px rgba(0, 0, 0, 0.5);
+    min-width: 720px;
+    min-height: 560px;
 }
 
 /* ----- Search entry ----- */
@@ -35,12 +40,15 @@
     color: #7b7b86;
 }
 
-/* ----- Results container ----- */
+/* ----- Results container -----
+   Tall enough to comfortably show ~10 hits after the selected row,
+   avoiding the 'selected row is the last visible, no context below'
+   trap that preceded BUG-6 redesign. */
 .lixun-results {
     background-color: transparent;
     border-top: 1px solid rgba(255, 255, 255, 0.04);
     padding-top: 4px;
-    min-height: 320px;
+    min-height: 480px;
 }
 
 /* ----- Hit row ----- */
@@ -99,10 +107,14 @@ row:focus-within .lixun-hit,
     font-size: 14px;
 }
 
-/* Deliberately NOT overriding font-size here. A bigger title font
-   on the selected row would push row height up and clip the last
-   visible row (BUG-6 box-model rule). If visual emphasis is needed
-   beyond background+outline, use font-weight, not size. */
+/* Restored 16 px on selected title — user-preferred visual emphasis.
+   The row-clip concern that initially drove removing this is now
+   addressed by a taller `.lixun-results` min-height (480 px) so the
+   viewport always has headroom for the slightly bigger selected row
+   plus several unselected rows below it. */
+.lixun-top-hit .lixun-title {
+    font-size: 16px;
+}
 
 .lixun-subtitle {
     color: #a8a8b2;

@@ -180,14 +180,15 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
 
     window.init_layer_shell();
     window.set_layer(gtk4_layer_shell::Layer::Overlay);
+    // Anchor only Top. Leaving Left and Right unanchored lets the
+    // layer-shell compositor center the window horizontally on the
+    // monitor — anchoring both edges would stretch the surface to
+    // the full screen width, which we explicitly do not want here.
+    // Vertical position is pinned by the top margin.
     window.set_anchor(Edge::Top, true);
-    window.set_anchor(Edge::Left, true);
-    window.set_anchor(Edge::Right, true);
     window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::OnDemand);
 
     window.set_margin(Edge::Top, DEFAULT_TOP_MARGIN);
-    window.set_margin(Edge::Left, 0);
-    window.set_margin(Edge::Right, 0);
     add_css_class(&window, "lixun-window");
 
     let display = gtk::gdk::Display::default().unwrap();

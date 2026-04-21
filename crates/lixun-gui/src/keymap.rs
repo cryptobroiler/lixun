@@ -115,6 +115,36 @@ fn is_printable_key(key: gtk::gdk::Key, state: gtk::gdk::ModifierType) -> bool {
     matches!(key.to_unicode(), Some(c) if !c.is_control())
 }
 
+/// Scroll the list so `target` and a few rows past it (in the
+/// direction of movement) stay visible. Solves the 'selected row
+/// sits at the bottom edge with no context below' problem by
+/// pinning the scroll anchor at `target + margin` — GTK ensures
+/// that anchor is in the viewport, which means `target` itself
+/// lands higher up. `delta` is the scroll direction: positive for
+/// Down navigation (look-ahead below), negative for Up (look-ahead
+/// above). Margin of 3 gives a usable amount of context without
+/// scrolling too eagerly on every keypress.
+fn scroll_with_margin(
+    list_view: &gtk::ListView,
+    selection: &gtk::SingleSelection,
+    target: u32,
+    delta: i32,
+) {
+    const MARGIN: i32 = 3;
+    let n = selection.n_items();
+    if n == 0 {
+        return;
+    }
+    let anchor_signed = target as i32 + delta.signum() * MARGIN;
+    let anchor = anchor_signed.clamp(0, n as i32 - 1) as u32;
+    let info = gtk::ScrollInfo::new();
+    info.set_enable_vertical(true);
+    // NONE: do not steal focus to the anchor row, do not change
+    // selection — just make sure it is on-screen. The caller
+    // already updated `selection.set_selected(target)` before this.
+    list_view.scroll_to(anchor, gtk::ListScrollFlags::NONE, Some(info));
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn install_keyboard_handler(
     window: &gtk::ApplicationWindow,
@@ -196,7 +226,7 @@ pub(crate) fn install_keyboard_handler(
                         jump_to_next_category(&selection, &filter_model, -1);
                         let target = selection.selected();
                         if target != gtk::INVALID_LIST_POSITION {
-                            list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
+                            scroll_with_margin(&list_view, &selection, target, -1);
                         }
                         if entry_had_focus {
                             list_view.grab_focus();
@@ -207,7 +237,7 @@ pub(crate) fn install_keyboard_handler(
                     if current > 0 {
                         let target = current - 1;
                         selection.set_selected(target);
-                        list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
+                        scroll_with_margin(&list_view, &selection, target, -1);
                         if entry_had_focus {
                             list_view.grab_focus();
                         }
@@ -227,7 +257,7 @@ pub(crate) fn install_keyboard_handler(
                         jump_to_next_category(&selection, &filter_model, 1);
                         let target = selection.selected();
                         if target != gtk::INVALID_LIST_POSITION {
-                            list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
+                            scroll_with_margin(&list_view, &selection, target, 1);
                         }
                         if entry_had_focus {
                             list_view.grab_focus();
@@ -239,7 +269,7 @@ pub(crate) fn install_keyboard_handler(
                     if current + 1 < n {
                         let target = current + 1;
                         selection.set_selected(target);
-                        list_view.scroll_to(target, gtk::ListScrollFlags::FOCUS, None);
+                        scroll_with_margin(&list_view, &selection, target, 1);
                     }
                     if entry_had_focus && n > 0 {
                         list_view.grab_focus();
