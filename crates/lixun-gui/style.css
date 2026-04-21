@@ -76,11 +76,20 @@ row:focus-within .lixun-hit,
 
 /* Hero (top-hit) row: card-like elevation. The row factory toggles
    `.lixun-top-hit` onto the selected item only, so this class is
-   itself the selection indicator. */
+   itself the selection indicator.
+   CRITICAL: keep the BOX MODEL identical to `.lixun-hit` (same
+   padding, no extra border) so the row height does not change
+   when selection moves between rows. ListView virtualization
+   measures row height once; if selection grows the row, the last
+   visible row gets clipped at the viewport edge (BUG-6). Visual
+   distinction is carried by background + inset outline, which do
+   not affect layout height. */
 .lixun-top-hit {
-    padding: 12px 14px;
+    padding: 8px 12px;
     background-color: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    outline: 1px solid rgba(255, 255, 255, 0.12);
+    outline-offset: -1px;
+    border-radius: 10px;
 }
 
 /* ----- Title / subtitle / kind ----- */
@@ -90,9 +99,10 @@ row:focus-within .lixun-hit,
     font-size: 14px;
 }
 
-.lixun-top-hit .lixun-title {
-    font-size: 16px;
-}
+/* Deliberately NOT overriding font-size here. A bigger title font
+   on the selected row would push row height up and clip the last
+   visible row (BUG-6 box-model rule). If visual emphasis is needed
+   beyond background+outline, use font-weight, not size. */
 
 .lixun-subtitle {
     color: #a8a8b2;
