@@ -19,6 +19,16 @@ impl StatusBar {
         revealer.set_transition_type(gtk::RevealerTransitionType::Crossfade);
         revealer.set_transition_duration(200);
         revealer.set_reveal_child(false);
+        // CRITICAL: a GtkRevealer with Crossfade transition animates
+        // opacity, NOT box size; its child's natural height keeps
+        // occupying layout space the moment it is first revealed,
+        // and a subsequent set_reveal_child(false) only fades the
+        // child to transparent. The layout gap stays behind as
+        // "phantom bottom margin" that grows on every subsequent
+        // empty-clear cycle. Hide the revealer itself with
+        // set_visible(false) so GTK drops it from allocation
+        // entirely. show_* methods must flip it back on.
+        revealer.set_visible(false);
 
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         content.set_widget_name("lixun-status-inner");
@@ -51,6 +61,7 @@ impl StatusBar {
         add_css_class(&label, "lixun-status-label");
         self.content.append(&spinner);
         self.content.append(&label);
+        self.revealer.set_visible(true);
         self.revealer.set_reveal_child(true);
     }
 
@@ -80,6 +91,7 @@ impl StatusBar {
             });
             self.content.append(&button);
         }
+        self.revealer.set_visible(true);
         self.revealer.set_reveal_child(true);
     }
 
@@ -102,11 +114,18 @@ impl StatusBar {
         });
         self.content.append(&button);
 
+        self.revealer.set_visible(true);
         self.revealer.set_reveal_child(true);
     }
 
     pub(crate) fn hide(&self) {
+        // Drop the revealer out of layout immediately (see note in
+        // `new`). Skip the fade-out animation on hide: instant
+        // collapse matches the Spotlight UX of "empty query =
+        // pristine launcher" better than a 200 ms crossfade that
+        // still leaves a visible gap during the transition.
         self.revealer.set_reveal_child(false);
+        self.revealer.set_visible(false);
     }
 }
 
