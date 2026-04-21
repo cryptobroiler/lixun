@@ -192,6 +192,23 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     add_css_class(&window, "lixun-window");
 
     let display = gtk::gdk::Display::default().unwrap();
+
+    // Resolve window size as a percentage of the primary monitor.
+    // The launcher opens on the monitor containing the pointer at
+    // spawn time, but at this point we don't know which monitor —
+    // `window.monitor()` returns None until present(). Use the
+    // first monitor as a reasonable default; if the user has
+    // wildly different monitor sizes this will still look correct
+    // within each monitor's proportions because the CSS min-width
+    // / min-height act as absolute floors.
+    if let Some(monitor) = display.monitors().item(0).and_downcast::<gtk::gdk::Monitor>() {
+        let geom = monitor.geometry();
+        let w = geom.width() * i32::from(daemon_config.gui.width_percent) / 100;
+        let h = geom.height() * i32::from(daemon_config.gui.height_percent) / 100;
+        window.set_default_size(w, h);
+        window.set_size_request(w, h);
+    }
+
     let provider = gtk::CssProvider::new();
     provider.load_from_string(EMBEDDED_STYLESHEET);
     gtk::style_context_add_provider_for_display(
@@ -205,7 +222,10 @@ pub(crate) fn build_window(app: &gtk::Application) -> Result<()> {
     vbox.set_margin_start(16);
     vbox.set_margin_end(16);
     vbox.set_margin_top(12);
-    vbox.set_margin_bottom(12);
+    // Minimal bottom margin — the scrolled results area is the last
+    // child and we want it to extend as close to the window bottom
+    // as possible to maximise visible row count.
+    vbox.set_margin_bottom(2);
 
     let entry = gtk::Entry::builder()
         .placeholder_text("Search\u{2026}")

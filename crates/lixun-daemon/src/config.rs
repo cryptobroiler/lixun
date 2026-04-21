@@ -14,6 +14,7 @@ const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
     "ranking",
     "keybindings",
     "preview",
+    "gui",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -26,6 +27,13 @@ struct ConfigToml {
     ranking: Option<RankingToml>,
     keybindings: Option<KeybindingsToml>,
     preview: Option<PreviewToml>,
+    gui: Option<GuiToml>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GuiToml {
+    width_percent: Option<u8>,
+    height_percent: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,8 +150,28 @@ pub struct Config {
     pub ranking_attachments: f32,
     pub keybindings: Keybindings,
     pub preview: PreviewConfig,
+    pub gui: GuiConfig,
     pub state_dir: PathBuf,
     pub plugin_sections: BTreeMap<String, toml::Value>,
+}
+
+/// Launcher window sizing policy. Percentages are of the monitor
+/// the launcher opens on (resolved at window-build time). Values
+/// outside 10-95 are clamped — a 5% window is unusable, and 100%
+/// covers the entire monitor with no breathing room.
+#[derive(Debug, Clone)]
+pub struct GuiConfig {
+    pub width_percent: u8,
+    pub height_percent: u8,
+}
+
+impl Default for GuiConfig {
+    fn default() -> Self {
+        Self {
+            width_percent: 40,
+            height_percent: 60,
+        }
+    }
 }
 
 impl Default for Config {
@@ -161,6 +189,7 @@ impl Default for Config {
             ranking_attachments: 0.9,
             keybindings: Keybindings::default(),
             preview: PreviewConfig::default(),
+            gui: GuiConfig::default(),
             state_dir: state_dir(),
             plugin_sections: BTreeMap::new(),
         }
@@ -320,6 +349,14 @@ impl Config {
             }
             if let Some(v) = preview.cache_dir {
                 cfg.preview.cache_dir = expand_tilde(&v);
+            }
+        }
+        if let Some(gui) = parsed.gui {
+            if let Some(v) = gui.width_percent {
+                cfg.gui.width_percent = v.clamp(10, 95);
+            }
+            if let Some(v) = gui.height_percent {
+                cfg.gui.height_percent = v.clamp(10, 95);
             }
         }
 

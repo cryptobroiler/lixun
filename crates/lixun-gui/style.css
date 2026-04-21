@@ -5,17 +5,20 @@
    below but group them visually for maintainability). ----- */
 
 /* ----- Main window -----
-   Fixed width + min-height drive the Spotlight-like proportions.
    Only the Top edge is anchored in layer-shell (see window.rs); the
-   compositor centers horizontally when Left/Right are unanchored. */
+   compositor centers horizontally when Left/Right are unanchored.
+   Actual width/height come from [gui] config percentages of the
+   monitor, applied via window.set_default_size + set_size_request
+   before present. Absolute minimums below guard against pathological
+   tiny monitors (sub-1000 px) where even 40% could be unusable. */
 .lixun-window {
     background: rgba(28, 28, 32, 0.92);
     border-radius: 14px;
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7),
                 0 8px 16px rgba(0, 0, 0, 0.5);
-    min-width: 720px;
-    min-height: 640px;
+    min-width: 480px;
+    min-height: 400px;
 }
 
 /* ----- Search entry ----- */
@@ -41,19 +44,15 @@
 }
 
 /* ----- Results container -----
-   Tall enough to comfortably show ~10 hits after the selected row,
-   avoiding the 'selected row is the last visible, no context below'
-   trap that preceded BUG-6 redesign.
-   padding-bottom reserves space so the last visible row does not
-   get clipped at the viewport edge — the ScrolledWindow only
-   scrolls to make rows 'at least fit', and without padding the
-   bottom row sits flush and clips its descender/outline. */
+   Stretches vertically via scrolled.vexpand(true) to fill whatever
+   height the window has after entry + chips + margins. Absolute
+   floor below keeps the list visible if the window is pathologically
+   short for some reason. */
 .lixun-results {
     background-color: transparent;
     border-top: 1px solid rgba(255, 255, 255, 0.04);
     padding-top: 4px;
-    padding-bottom: 8px;
-    min-height: 520px;
+    min-height: 200px;
 }
 
 /* ----- Hit row ----- */
