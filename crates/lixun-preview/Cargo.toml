@@ -1,0 +1,18 @@
+[package]
+name = "lixun-preview"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lixun-core = { path = "../lixun-core" }
+anyhow.workspace = true
+inventory.workspace = true
+tracing.workspace = true
+glib = "0.20"
+gtk = { package = "gtk4", version = "0.9", features = ["v4_12"] }
+dirs = "5"
+toml = "0.8"
+
+[lib]
+name = "lixun_preview"
+path = "src/lib.rs"

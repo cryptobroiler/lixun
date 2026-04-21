@@ -12,6 +12,7 @@ members = [
     "crates/lixun-daemon",
     "crates/lixun-gui",
     "crates/lixun-cli",
+    "crates/lixun-preview",
 ]
 resolver = "2"
 
