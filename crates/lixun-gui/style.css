@@ -4,6 +4,24 @@
    are only partially honored by GtkCssProvider, so we use hardcoded values
    below but group them visually for maintainability). ----- */
 
+/* ----- Top-level window transparency -----
+   GTK4's root `window` CSS node paints a default opaque background
+   BEHIND our content. Without this rule the `.lixun-window`
+   border-radius rounds the INNER surface while the outer
+   rectangular buffer stays opaque, so the compositor paints the
+   four corners as solid black squares around the rounded body.
+   Setting background: transparent here lets the compositor see
+   through the corners to the desktop underneath, so border-radius
+   on `.lixun-window` below produces actual rounded corners.
+
+   Confirmed fix-pattern: anyrun, ags, walker, ironbar all set the
+   same rule. GTK docs (class.Window.html#css-nodes) identify the
+   `window` node as the site of the default paint. No Rust-side
+   gdk_surface_set_opaque_region() is needed in GTK4 ≥ 4.16. */
+window {
+    background: transparent;
+}
+
 /* ----- Main window -----
    Only the Top edge is anchored in layer-shell (see window.rs); the
    compositor centers horizontally when Left/Right are unanchored.
