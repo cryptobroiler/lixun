@@ -21,7 +21,9 @@ use std::fs;
 
 use gtk::prelude::*;
 use lixun_core::{Action, Category, Hit};
-use lixun_preview::{PreviewPlugin, PreviewPluginCfg, PreviewPluginEntry, SizingPreference};
+use lixun_preview::{
+    PreviewPlugin, PreviewPluginCfg, PreviewPluginEntry, SizingPreference, default_launch,
+};
 use mail_parser::{Address, MessageParser, MimeHeaders};
 
 const MAX_EMAIL_BYTES: usize = 8 * 1024 * 1024;
@@ -68,6 +70,41 @@ impl PreviewPlugin for EmailPreview {
 
     fn sizing(&self) -> SizingPreference {
         SizingPreference::FitToContent
+    }
+
+    /// Mail attachments cannot be launched from preview today: the
+    /// mbox slice + temp-extract path lives in `lixun-gui::actions`
+    /// and is not linked into the preview binary. Decline to launch
+    /// so the host hides the Open button for attachment hits
+    /// instead of showing a button that does nothing.
+    fn can_launch(&self, hit: &Hit) -> bool {
+        !matches!(
+            hit.action,
+            Action::OpenAttachment { .. } | Action::ReplaceQuery { .. }
+        )
+    }
+
+    /// Email-specific launches route through Thunderbird's `mid:`
+    /// URI handler — the only launcher on Linux that can address a
+    /// message by its RFC-5322 Message-ID without needing the
+    /// on-disk mbox path. Everything else (an `OpenFile` hit for a
+    /// `.eml` on disk, an `OpenAttachment` temp-extract pre-arranged
+    /// by the launcher) falls through to `default_launch`, which
+    /// runs the XDG default handler for the path.
+    ///
+    /// This override is the ONLY place in the codebase that knows
+    /// about Thunderbird; the preview host and trait crate are
+    /// deliberately MUA-agnostic.
+    fn launch(&self, hit: &Hit) -> anyhow::Result<()> {
+        match &hit.action {
+            Action::OpenMail { message_id } | Action::OpenParentMail { message_id } => {
+                std::process::Command::new("thunderbird")
+                    .arg(format!("mid:{}", message_id))
+                    .spawn()?;
+                Ok(())
+            }
+            _ => default_launch(hit),
+        }
     }
 
     fn build(&self, hit: &Hit, _cfg: &PreviewPluginCfg<'_>) -> anyhow::Result<gtk::Widget> {

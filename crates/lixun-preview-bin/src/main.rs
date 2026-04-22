@@ -20,8 +20,10 @@ use gtk::gio::ApplicationFlags;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use lixun_core::{Action, Hit};
-use lixun_preview::{PreviewPluginCfg, SizingPreference, install_user_css, select_plugin};
+use lixun_core::Hit;
+use lixun_preview::{
+    PreviewPlugin, PreviewPluginCfg, SizingPreference, install_user_css, select_plugin,
+};
 
 use lixun_preview_bundle as _;
 
@@ -124,6 +126,11 @@ fn build_preview_window(
         return Ok(());
     };
 
+    // Shared between the renderer path (build), the header's Open
+    // button click, and the key controller's Enter branch. Rc is
+    // enough: preview-bin is single-threaded on the GTK main
+    // context.
+    let plugin: Rc<dyn PreviewPlugin> = Rc::from(plugin);
     let plugin_id = plugin.id();
     let plugin_cfg = PreviewPluginCfg {
         section: preview_cfg.plugin_sections.get(plugin_id),
@@ -182,7 +189,7 @@ fn build_preview_window(
     install_user_css(&display);
 
     let vbox = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let header = build_header(hit, plugin_id, app);
+    let header = build_header(hit, plugin_id, app, Rc::clone(&plugin));
     vbox.append(&header);
 
     let content_scroll = gtk::ScrolledWindow::new();
@@ -229,8 +236,16 @@ fn build_preview_window(
     vbox.append(&content_scroll);
     window.set_child(Some(&vbox));
 
-    let launch_action = launchable_action(&hit.action);
-    install_close_controllers(&window, app, launch_action);
+    let launchable = plugin.can_launch(hit);
+    install_close_controllers(
+        &window,
+        app,
+        if launchable {
+            Some((Rc::clone(&plugin), hit.clone()))
+        } else {
+            None
+        },
+    );
 
     window.present();
     tracing::info!(
@@ -241,7 +256,12 @@ fn build_preview_window(
     Ok(())
 }
 
-fn build_header(hit: &Hit, plugin_id: &str, app: &gtk::Application) -> gtk::Box {
+fn build_header(
+    hit: &Hit,
+    plugin_id: &str,
+    app: &gtk::Application,
+    plugin: Rc<dyn PreviewPlugin>,
+) -> gtk::Box {
     let header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     header.set_widget_name("lixun-preview-header");
     header.set_margin_top(12);
@@ -268,15 +288,16 @@ fn build_header(hit: &Hit, plugin_id: &str, app: &gtk::Application) -> gtk::Box 
 
     header.append(&text);
 
-    if let Some(action) = launchable_action(&hit.action) {
+    if plugin.can_launch(hit) {
         let open_btn = gtk::Button::from_icon_name("document-open-symbolic");
         open_btn.set_tooltip_text(Some("Open (Enter)"));
         open_btn.set_widget_name("lixun-preview-open-btn");
         open_btn.add_css_class("flat");
-        let action_for_click = action.clone();
+        let plugin_for_click = Rc::clone(&plugin);
+        let hit_for_click = hit.clone();
         let app_for_click = app.clone();
         open_btn.connect_clicked(move |_| {
-            launch_action_and_quit(&action_for_click, &app_for_click);
+            run_plugin_launch(&plugin_for_click, &hit_for_click, &app_for_click);
         });
         header.append(&open_btn);
     }
@@ -288,180 +309,31 @@ fn build_header(hit: &Hit, plugin_id: &str, app: &gtk::Application) -> gtk::Box 
     header
 }
 
-/// Decide whether a hit's `Action` can be launched from within the
-/// preview (Open button + Enter key). Returns a clone of the action
-/// so the launch handler has owned state it can move into signal
-/// closures. Returns `None` for actions that only make sense inside
-/// the launcher itself (`ReplaceQuery`) or that preview cannot
-/// meaningfully execute (none today).
-///
-/// Kept as a single place to list every launchable variant so that
-/// adding a new `Action` fails loud: the Rust match in
-/// `launch_action_and_quit` is non-exhaustive and will refuse to
-/// compile until the new variant is handled.
-fn launchable_action(action: &Action) -> Option<Action> {
-    match action {
-        Action::OpenFile { .. }
-        | Action::ShowInFileManager { .. }
-        | Action::OpenMail { .. }
-        | Action::OpenParentMail { .. }
-        | Action::OpenAttachment { .. }
-        | Action::Launch { .. }
-        | Action::Exec { .. } => Some(action.clone()),
-        Action::ReplaceQuery { .. } => None,
-    }
-}
-
-/// Execute the hit's action and exit with `EXIT_CODE_LAUNCHED` so
-/// the daemon's PreviewSpawner dispatches `GuiCommand::ClearSession`
-/// instead of re-showing the launcher (the user has completed the
-/// task).
-///
-/// This mirrors `lixun-gui::actions::execute_action` branch for
-/// branch, but lives here rather than being shared because the
-/// preview binary is deliberately dependency-free with respect to
-/// the GUI crate. Any fix to the launch semantics of a given
-/// `Action` variant must be applied to BOTH files; both are linked
-/// by the `Action` enum in `lixun-core`, which is the single source
-/// of truth for the variants themselves.
-fn launch_action_and_quit(action: &Action, app: &gtk::Application) {
-    let launched = match action {
-        Action::OpenFile { path } | Action::ShowInFileManager { path } => {
-            launch_default_for_path(path)
-        }
-        Action::OpenMail { message_id } | Action::OpenParentMail { message_id } => {
-            launch_thunderbird_mid(message_id)
-        }
-        Action::OpenAttachment { .. } => {
-            // Mail attachments require slicing the mbox and writing a
-            // temp file, logic that currently lives only in
-            // lixun-gui::actions. Preview does not carry that code, so
-            // fall through to a clean exit; the user can still launch
-            // the attachment from the launcher itself.
-            tracing::info!(
-                "preview: attachment launch from preview not supported; closing preview only"
-            );
-            false
-        }
-        Action::Launch { exec, .. } => launch_desktop_exec(exec),
-        Action::Exec { cmdline, .. } => launch_exec_cmdline(cmdline),
-        Action::ReplaceQuery { .. } => false,
-    };
-
-    if launched {
-        // app.quit() returns control to the GTK main loop which
-        // tears down the window and exits main(). Exit with the
-        // launched sentinel so the daemon does NOT re-show the
-        // launcher — the user has completed the task.
-        app.quit();
-        std::process::exit(EXIT_CODE_LAUNCHED);
-    } else {
-        // Launch failed. Keep the window open; the user can press
-        // Escape to dismiss without the launcher re-showing via
-        // the success path, and the launcher will still reopen via
-        // the non-42 exit path once they do.
-        tracing::warn!("preview: launch failed, window stays open");
-    }
-}
-
-fn launch_default_for_path(path: &std::path::Path) -> bool {
-    let uri = gtk::gio::File::for_path(path).uri();
-    if uri.is_empty() {
-        tracing::warn!("preview: cannot form URI from path {:?}", path);
-        return false;
-    }
-    match gtk::gio::AppInfo::launch_default_for_uri(&uri, gtk::gio::AppLaunchContext::NONE) {
+/// Delegate the launch to the plugin that rendered the hit. The
+/// plugin owns the launch semantics for its domain (e.g. the email
+/// plugin knows about `thunderbird mid:{id}`; the host binary does
+/// NOT). On success, exit with `EXIT_CODE_LAUNCHED` so the daemon's
+/// PreviewSpawner dispatches `GuiCommand::ClearSession` instead of
+/// re-showing the launcher. On failure, keep the window open and
+/// let the user Escape cleanly.
+fn run_plugin_launch(plugin: &Rc<dyn PreviewPlugin>, hit: &Hit, app: &gtk::Application) {
+    match plugin.launch(hit) {
         Ok(()) => {
-            tracing::info!("preview: launched default handler for {:?}", path);
-            true
+            tracing::info!(
+                "preview: plugin `{}` launched hit_id={}",
+                plugin.id(),
+                hit.id.0
+            );
+            app.quit();
+            std::process::exit(EXIT_CODE_LAUNCHED);
         }
         Err(e) => {
             tracing::error!(
-                "preview: launch_default_for_uri failed for {:?}: {}",
-                path,
+                "preview: plugin `{}` launch failed for hit_id={}: {}",
+                plugin.id(),
+                hit.id.0,
                 e
             );
-            false
-        }
-    }
-}
-
-fn launch_thunderbird_mid(message_id: &str) -> bool {
-    match std::process::Command::new("thunderbird")
-        .arg(format!("mid:{}", message_id))
-        .spawn()
-    {
-        Ok(_) => {
-            tracing::info!("preview: launched thunderbird mid:{}", message_id);
-            true
-        }
-        Err(e) => {
-            tracing::error!(
-                "preview: failed to spawn thunderbird for mid:{}: {}",
-                message_id,
-                e
-            );
-            false
-        }
-    }
-}
-
-/// Launch a `.desktop`-style Exec= line. Strips XDG field codes
-/// (`%f`, `%F`, `%u`, `%U`, `%i`, `%c`, `%k`, …) which are
-/// meaningless when the launcher invokes the app with no file/URI
-/// argument, then splits on whitespace.
-///
-/// This is intentionally naive quoting: a whitespace split does not
-/// honour `"arg with spaces"` in a `.desktop` Exec= line. The
-/// launcher-side `execute_action` path uses the same naive split
-/// (see lixun-gui::actions), so behavior matches. Pulling in a
-/// shell-tokeniser dep just for the preview would drift the two
-/// launch paths apart; when proper quoting is needed, fix both in
-/// one pass.
-fn launch_desktop_exec(exec: &str) -> bool {
-    let tokens: Vec<&str> = exec
-        .split_whitespace()
-        .filter(|tok| {
-            !matches!(
-                *tok,
-                "%f" | "%F" | "%u" | "%U" | "%d" | "%D" | "%n" | "%N" | "%i" | "%c" | "%k" | "%v"
-                | "%m"
-            )
-        })
-        .collect();
-    let Some((program, args)) = tokens.split_first() else {
-        tracing::error!("preview: empty exec after field-code strip: {:?}", exec);
-        return false;
-    };
-    match std::process::Command::new(program).args(args).spawn() {
-        Ok(_) => {
-            tracing::info!("preview: launched desktop exec={:?}", exec);
-            true
-        }
-        Err(e) => {
-            tracing::error!("preview: spawn failed for exec={:?}: {}", exec, e);
-            false
-        }
-    }
-}
-
-fn launch_exec_cmdline(cmdline: &[String]) -> bool {
-    let Some((program, args)) = cmdline.split_first() else {
-        tracing::error!("preview: Action::Exec with empty cmdline");
-        return false;
-    };
-    match std::process::Command::new(program).args(args).spawn() {
-        Ok(_) => {
-            tracing::info!("preview: launched exec cmdline={:?}", cmdline);
-            true
-        }
-        Err(e) => {
-            tracing::error!(
-                "preview: spawn failed for cmdline={:?}: {}",
-                cmdline,
-                e
-            );
-            false
         }
     }
 }
@@ -517,7 +389,7 @@ fn pick_monitor(display: &gtk::gdk::Display) -> Option<gtk::gdk::Monitor> {
 fn install_close_controllers(
     window: &gtk::ApplicationWindow,
     app: &gtk::Application,
-    launchable: Option<Action>,
+    launchable: Option<(Rc<dyn PreviewPlugin>, Hit)>,
 ) {
     let showed_at = Rc::new(RefCell::new(Instant::now()));
 
@@ -541,7 +413,6 @@ fn install_close_controllers(
     key.set_propagation_phase(gtk::PropagationPhase::Capture);
     {
         let app = app.clone();
-        let launchable = launchable.clone();
         key.connect_key_pressed(move |_, keyval, _keycode, _state| {
             let sym = keyval.name().map(|g| g.to_string()).unwrap_or_default();
             match sym.as_str() {
@@ -550,8 +421,8 @@ fn install_close_controllers(
                     glib::Propagation::Stop
                 }
                 "Return" | "KP_Enter" => {
-                    if let Some(action) = launchable.as_ref() {
-                        launch_action_and_quit(action, &app);
+                    if let Some((plugin, hit)) = launchable.as_ref() {
+                        run_plugin_launch(plugin, hit, &app);
                     } else {
                         app.quit();
                     }

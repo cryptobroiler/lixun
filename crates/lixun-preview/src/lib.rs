@@ -62,7 +62,8 @@ pub enum SizingPreference {
     FixedCap,
 }
 
-/// A format plugin that renders a preview widget for a hit.
+/// A format plugin that renders a preview widget for a hit AND
+/// owns the launch semantics for hits in its domain.
 ///
 /// Implementations must:
 /// - Return a stable, globally-unique `id()` used as plugin key and
@@ -74,6 +75,11 @@ pub enum SizingPreference {
 ///   must return a placeholder widget immediately and offload
 ///   to a worker thread via `gio::spawn_blocking` +
 ///   `glib::MainContext::spawn_local`.
+/// - Override `launch()` if the hit's default handler is NOT the
+///   XDG default handler for a file path (mail messages are the
+///   canonical example: `Action::OpenMail { message_id }` needs
+///   `thunderbird mid:{id}`, which only the email plugin knows;
+///   the preview host must NOT hardcode that).
 pub trait PreviewPlugin: Send + Sync + 'static {
     fn id(&self) -> &'static str;
 
@@ -89,6 +95,110 @@ pub trait PreviewPlugin: Send + Sync + 'static {
     }
 
     fn build(&self, hit: &Hit, cfg: &PreviewPluginCfg<'_>) -> anyhow::Result<gtk::Widget>;
+
+    /// Whether this plugin can turn `hit` into a user-visible
+    /// launch (Open button in the preview header + Enter key
+    /// inside the preview window).
+    ///
+    /// Default: true for every `Action` variant whose launch is a
+    /// well-defined system operation that does NOT require
+    /// launcher-internal state (i.e. everything except
+    /// `ReplaceQuery`, which is a launcher-only text-swap and has
+    /// no meaning in preview).
+    ///
+    /// Plugins with in-process extraction steps (e.g. mail
+    /// attachments sliced out of an mbox) may return `false` if
+    /// they cannot perform that extraction without the launcher's
+    /// action helpers; the preview host then hides the Open button
+    /// and maps Enter to plain dismiss.
+    fn can_launch(&self, hit: &Hit) -> bool {
+        !matches!(hit.action, lixun_core::Action::ReplaceQuery { .. })
+    }
+
+    /// Launch this hit. Called by the preview host when the user
+    /// clicks the Open button or presses Enter. The host will
+    /// exit with its "launched" sentinel on Ok(()) so the daemon
+    /// clears the launcher session.
+    ///
+    /// Default implementation handles the generic path-based
+    /// variants via `xdg-open` / `gio launch_default_for_uri` and
+    /// the generic command-line variants (`Launch`, `Exec`) via
+    /// `std::process::Command`. Plugins whose domain has a
+    /// non-filesystem launch path (mail: `thunderbird mid:{id}`)
+    /// MUST override this.
+    ///
+    /// Returning `Err` keeps the preview window open so the user
+    /// can Escape cleanly; the host logs the error.
+    fn launch(&self, hit: &Hit) -> anyhow::Result<()> {
+        default_launch(hit)
+    }
+}
+
+/// Generic launch logic used by the `PreviewPlugin::launch` default
+/// implementation. Exposed as a free function so plugin overrides
+/// can fall through to it for action variants they don't specialise
+/// (e.g. `lixun-preview-email` overrides only `OpenMail` /
+/// `OpenParentMail` and calls back to `default_launch` for an
+/// `OpenFile` hit pointing at a `.eml` on disk).
+pub fn default_launch(hit: &lixun_core::Hit) -> anyhow::Result<()> {
+    use gtk::prelude::FileExt;
+    use lixun_core::Action;
+    match &hit.action {
+        Action::OpenFile { path } | Action::ShowInFileManager { path } => {
+            let uri = gtk::gio::File::for_path(path).uri();
+            if uri.is_empty() {
+                anyhow::bail!("cannot form URI from path {:?}", path);
+            }
+            gtk::gio::AppInfo::launch_default_for_uri(&uri, gtk::gio::AppLaunchContext::NONE)?;
+            Ok(())
+        }
+        Action::Launch { exec, .. } => {
+            let tokens: Vec<&str> = exec
+                .split_whitespace()
+                .filter(|tok| {
+                    !matches!(
+                        *tok,
+                        "%f" | "%F"
+                            | "%u"
+                            | "%U"
+                            | "%d"
+                            | "%D"
+                            | "%n"
+                            | "%N"
+                            | "%i"
+                            | "%c"
+                            | "%k"
+                            | "%v"
+                            | "%m"
+                    )
+                })
+                .collect();
+            let Some((program, args)) = tokens.split_first() else {
+                anyhow::bail!("empty exec line after field-code strip: {:?}", exec);
+            };
+            std::process::Command::new(program).args(args).spawn()?;
+            Ok(())
+        }
+        Action::Exec { cmdline, .. } => {
+            let Some((program, args)) = cmdline.split_first() else {
+                anyhow::bail!("Action::Exec with empty cmdline");
+            };
+            std::process::Command::new(program).args(args).spawn()?;
+            Ok(())
+        }
+        Action::OpenMail { .. }
+        | Action::OpenParentMail { .. }
+        | Action::OpenAttachment { .. } => {
+            anyhow::bail!(
+                "default_launch: {:?} is plugin-specific and has no generic fallback; \
+                 the plugin must override PreviewPlugin::launch",
+                std::mem::discriminant(&hit.action)
+            );
+        }
+        Action::ReplaceQuery { .. } => {
+            anyhow::bail!("ReplaceQuery has no standalone launch semantics");
+        }
+    }
 }
 
 pub struct PreviewPluginEntry {
