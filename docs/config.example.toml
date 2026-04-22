@@ -101,12 +101,6 @@ exclude = [
     ".xsession-errors",
     "core.",
 
-    # AI tool state
-    ".local/share/opencode",
-    ".local/share/aichat",
-    ".continue",
-    ".ollama",
-
     # Steam / gaming
     ".local/share/Steam",
     ".steampath",
