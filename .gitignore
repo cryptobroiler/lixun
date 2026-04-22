@@ -10,7 +10,8 @@ Cargo.lock
 /packaging/arch/releases/lixun-*/
 /packaging/arch/releases/lupa-*/
 
-# local tooling agent workspace (plans, notepads, transcripts — local only)
+# Local notes workspace (plans, notepads, transcripts — local only)
+/.local/
 /.local/
 
 # AGENTS.md — project-level instructions for AI coding agents,
