@@ -1,7 +1,7 @@
 # Maintainer: Шабилиск <shabi@dkp.hk>
 pkgname=lixun-bin
 pkgver=0.3.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Spotlight-like launcher for Linux (pre-built binary)"
 arch=("x86_64")
 url="https://repo.dkp.hk/denis/lixun"
