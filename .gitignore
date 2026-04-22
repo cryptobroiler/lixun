@@ -12,10 +12,8 @@ Cargo.lock
 
 # Local notes workspace (plans, notepads, transcripts — local only)
 /.local/
-/.local/
 
-# AGENTS.md — project-level instructions for AI coding agents,
-# local-only per user preference (do not distribute with the repo).
+# Local-only notes and instructions, not distributed with the repo
 /AGENTS.md
 
 # Local reference documents (PDFs, etc.) used for design research
