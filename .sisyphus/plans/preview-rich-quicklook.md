@@ -632,6 +632,36 @@ arrow-key navigation feels laggy.
 
 ## Phase 3 — office plugin (rich PDF via LibreOffice)
 
+### Phase 3 status — shipped
+
+All items below are implemented, tested, and committed.
+
+- **Conversion pipeline** — Office documents convert via `soffice --headless --convert-to pdf` (`build_soffice_argv`, `run_soffice_convert`). All 10 representative fixtures (docx, xlsx, pptx, odt, ods, odp, doc, xls, ppt, rtf) produce valid multi-page PDF output. Evidence: `.sisyphus/evidence/preview-office-phase3/task-7-representative-formats.txt`.
+
+- **Cache** — Output stored at `<cache_dir>/office/<key>.pdf` with key `SHA-256(canonical_path, mtime_ns)`. Cache hits skip conversion entirely. Helpers: `cache_file_path`, `compute_cache_key`, `compute_cache_key_raw`.
+
+- **Timeout & reaping** — 30-second wall-clock timeout with SIGTERM → 250 ms → SIGKILL escalation. Post-kill process inspection confirms zero residual `soffice` or `oosplash` processes. Evidence: `.sisyphus/evidence/preview-office-phase3/task-7-failure-cases.txt` lines 100-197.
+
+- **Rich rendering** — Delegated to `lixun-preview-pdf::PdfView` via direct construction (no host coupling, no double-registration). The office plugin returns a `gtk::Stack` wrapping `PdfView::new(pdf).upcast()`, inheriting pagination, search, zoom, selection, and keyboard navigation verbatim.
+
+- **Live update** — `OfficePreview::update` handles arrow-key scrubbing by downcasting the Stack to find the rendered `PdfView` child, computing the new cache path, and calling `replace_path` on cache hit. On cache miss it returns `UPDATE_UNSUPPORTED` so the host re-invokes `build` to trigger async conversion. No async plumbing in the sync `update` path.
+
+- **Capabilities** — `text_selection`, `text_search`, `paginated`, `zoomable` = `true`. `SizingPreference::OwnsScroll`. Matches the PDF plugin because the rendering surface is identical.
+
+- **Error placeholders** — Conversion failures (corrupt input, encrypted input, missing `soffice`) produce bounded error placeholders labelled `"conversion failed: <reason>"` via the single `ConvertOutcome::Err` translation point in `build()`. Corrupt-input and encrypted-input failure paths validated. Evidence: `.sisyphus/evidence/preview-office-phase3/task-7-failure-cases.txt` (R-1 corrupt PASS, R-2 encrypted PASS with fixture-defect note).
+
+- **Modularity invariant** — Zero new office-domain references in host or trait crates. Evidence: `.sisyphus/evidence/preview-office-phase3/task-8-greps.txt` (G1 refined regex returns only one pre-existing daemon test fixture; G2/G3 confirm zero cross-references in host/trait crates).
+
+- **Test coverage** — 21 unit tests in `lixun-preview-office`, including 2 PNG-regression sentinels and 1 timeout-regression sentinel via `include_str!` source-grep assertions. Evidence: `.sisyphus/evidence/preview-office-phase3/task-8-build-tests.txt` (`cargo test -p lixun-preview-office` → 21 passed).
+
+- **Commits** — `1ef940f docs(preview): refresh quicklook plan status`, `d724321 feat(preview-office): render office previews through pdf view`, `3dad114 test(preview-office): cover pdf conversion and cache behavior`.
+
+**Known limitations / deferred:**
+
+- Outline sidebar — already deferred in Phase 2 maintenance (T1); no new scope for Phase 3.
+- `tests/fixtures/preview/office/sample-encrypted.docx` is mislabeled (unencrypted OOXML container). The encrypted-failure code path was validated with a temporary `msoffcrypto`-generated DOCX. Action item: regenerate the on-disk fixture during the next fixture refresh. See `.sisyphus/notepads/preview-quicklook-maintenance-office/issues.md`.
+- Rich-interaction QA (pagination, search, zoom, selection) was skipped at runtime due to no headless GTK input harness in the repository; the code wiring was verified via citation to specific lines in `crates/lixun-preview-pdf/src/widget.rs`. The features are inherited from the PDF plugin and covered transitively by its existing test suite.
+
 Goal: docx / xlsx / pptx / odt / ods / odp / doc / xls / ppt / rtf get
 the same rich preview as PDF. Same interaction surface: pan / zoom /
 paginate / text selection / search.
