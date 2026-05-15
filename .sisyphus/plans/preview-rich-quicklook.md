@@ -632,35 +632,60 @@ arrow-key navigation feels laggy.
 
 ## Phase 3 — office plugin (rich PDF via LibreOffice)
 
-### Phase 3 status — shipped
+### Phase 3 status (2026-05 — shipped via this work)
 
-All items below are implemented, tested, and committed.
-
-- **Conversion pipeline** — Office documents convert via `soffice --headless --convert-to pdf` (`build_soffice_argv`, `run_soffice_convert`). All 10 representative fixtures (docx, xlsx, pptx, odt, ods, odp, doc, xls, ppt, rtf) produce valid multi-page PDF output. Evidence: `.sisyphus/evidence/preview-office-phase3/task-7-representative-formats.txt`.
-
-- **Cache** — Output stored at `<cache_dir>/office/<key>.pdf` with key `SHA-256(canonical_path, mtime_ns)`. Cache hits skip conversion entirely. Helpers: `cache_file_path`, `compute_cache_key`, `compute_cache_key_raw`.
-
-- **Timeout & reaping** — 30-second wall-clock timeout with SIGTERM → 250 ms → SIGKILL escalation. Post-kill process inspection confirms zero residual `soffice` or `oosplash` processes. Evidence: `.sisyphus/evidence/preview-office-phase3/task-7-failure-cases.txt` lines 100-197.
-
-- **Rich rendering** — Delegated to `lixun-preview-pdf::PdfView` via direct construction (no host coupling, no double-registration). The office plugin returns a `gtk::Stack` wrapping `PdfView::new(pdf).upcast()`, inheriting pagination, search, zoom, selection, and keyboard navigation verbatim.
-
-- **Live update** — `OfficePreview::update` handles arrow-key scrubbing by downcasting the Stack to find the rendered `PdfView` child, computing the new cache path, and calling `replace_path` on cache hit. On cache miss it returns `UPDATE_UNSUPPORTED` so the host re-invokes `build` to trigger async conversion. No async plumbing in the sync `update` path.
-
-- **Capabilities** — `text_selection`, `text_search`, `paginated`, `zoomable` = `true`. `SizingPreference::OwnsScroll`. Matches the PDF plugin because the rendering surface is identical.
-
-- **Error placeholders** — Conversion failures (corrupt input, encrypted input, missing `soffice`) produce bounded error placeholders labelled `"conversion failed: <reason>"` via the single `ConvertOutcome::Err` translation point in `build()`. Corrupt-input and encrypted-input failure paths validated. Evidence: `.sisyphus/evidence/preview-office-phase3/task-7-failure-cases.txt` (R-1 corrupt PASS, R-2 encrypted PASS with fixture-defect note).
-
-- **Modularity invariant** — Zero new office-domain references in host or trait crates. Evidence: `.sisyphus/evidence/preview-office-phase3/task-8-greps.txt` (G1 refined regex returns only one pre-existing daemon test fixture; G2/G3 confirm zero cross-references in host/trait crates).
-
-- **Test coverage** — 21 unit tests in `lixun-preview-office`, including 2 PNG-regression sentinels and 1 timeout-regression sentinel via `include_str!` source-grep assertions. Evidence: `.sisyphus/evidence/preview-office-phase3/task-8-build-tests.txt` (`cargo test -p lixun-preview-office` → 21 passed).
-
-- **Commits** — `1ef940f docs(preview): refresh quicklook plan status`, `d724321 feat(preview-office): render office previews through pdf view`, `3dad114 test(preview-office): cover pdf conversion and cache behavior`.
-
-**Known limitations / deferred:**
-
-- Outline sidebar — already deferred in Phase 2 maintenance (T1); no new scope for Phase 3.
-- `tests/fixtures/preview/office/sample-encrypted.docx` is mislabeled (unencrypted OOXML container). The encrypted-failure code path was validated with a temporary `msoffcrypto`-generated DOCX. Action item: regenerate the on-disk fixture during the next fixture refresh. See `.sisyphus/notepads/preview-quicklook-maintenance-office/issues.md`.
-- Rich-interaction QA (pagination, search, zoom, selection) was skipped at runtime due to no headless GTK input harness in the repository; the code wiring was verified via citation to specific lines in `crates/lixun-preview-pdf/src/widget.rs`. The features are inherited from the PDF plugin and covered transitively by its existing test suite.
+- **SHIPPED**: Office documents (docx / xlsx / pptx / odt / ods / odp /
+  doc / xls / ppt / rtf) convert via `soffice --headless --convert-to pdf`
+  and render through the shared rich PDF viewer (`PdfView` from
+  `lixun-preview-pdf`).
+  - Evidence: `.sisyphus/evidence/preview-office-phase3/task-7-representative-formats.txt`
+    (10/10 fixtures convert, exit 0, multi-page output verified).
+  - Commit: `d724321 feat(preview-office): render office previews through pdf view`.
+- **SHIPPED**: Cache layout is `<cache_dir>/office/<sha-256>.pdf`. Cache key
+  is SHA-256 of (canonical path + mtime nanoseconds). Stale `.png`
+  entries from the pre-PDF cache are ignored on read and not actively
+  migrated (no TTL or size-cap eviction in v1).
+  - Evidence: `task-3-cache-policy.txt`, `task-4-docx-pdf-cache.txt`.
+- **SHIPPED**: Conversion timeout is 30 s wall-clock (raised from 15 s).
+  Timeouts kill the spawned soffice via SIGTERM → 250 ms → SIGKILL; no
+  zombie processes remain after timeout or external kill.
+  - Evidence: `task-4-conversion-failure.txt`,
+    `task-7-failure-cases.txt` (R-3 timeout reaping).
+- **SHIPPED**: `OfficePreview` advertises `PreviewCapabilities` with
+  `text_selection`, `text_search`, `paginated`, `zoomable` all true and
+  `SizingPreference::OwnsScroll`, mirroring the PDF plugin since the
+  rendering surface is identical. `update()` is overridden for in-place
+  arrow-key scrubbing on cache hits.
+  - Evidence: `task-5-pdf-view-reuse.txt`, `task-5-guardrails.txt`.
+- **SHIPPED**: Hard-modularity invariant is preserved. `lixun-preview-office`
+  is the sole crate that names `.docx` / `.xlsx` / `soffice` /
+  `libreoffice`; host binary, daemon, GUI, and the trait crate remain
+  unaware of office-specific identifiers. Office uses `PdfView`
+  directly, not via host mediation.
+  - Evidence: `task-5-guardrails.txt`, `task-8-greps.txt`.
+- **SHIPPED**: Tests-after coverage adds 11 unit tests including
+  PNG-regression sentinels (would fail if cache extension or argv
+  reverts to `png`) and a 30 s timeout regression sentinel.
+  - Evidence: `task-6-cargo-test-office.txt` (21 passed, 0 failed),
+    `task-6-png-regression-guard.txt`.
+  - Commit: `3dad114 test(preview-office): cover pdf conversion and cache behavior`.
+- **NOTE**: The static fixture `tests/fixtures/preview/office/sample-encrypted.docx`
+  is mislabeled (plain OOXML, not CFB-encrypted) so the encrypted-failure
+  test path is exercised in T7 via an msoffcrypto-generated fixture in
+  `/tmp` rather than the committed fixture. Tracked as a hygiene
+  follow-up; not a Phase 3 blocker since the plugin's
+  encrypted-failure code path is validated empirically.
+- **SHIPPED (rich interactions inherited)**: Pagination (PgUp/PgDn,
+  jump-to-page), search (Ctrl+F), zoom (Ctrl+= / Ctrl+- / Ctrl+0 and
+  Ctrl+scroll toward cursor), and text selection / copy work through
+  the embedded `PdfView` by construction. Runtime input was
+  SKIPPED-WITH-REASON in T7 because no headless GTK input harness
+  exists in the repo; the wiring is asserted via per-line citations
+  to `crates/lixun-preview-pdf/src/widget.rs`.
+  - Evidence: `task-7-rich-interactions.txt`.
+- **DEFERRED**: Outline / bookmarks sidebar remains deferred per the
+  Phase 2 decision (no safe poppler-rs binding for outline iteration).
+  Unchanged by this work.
 
 Goal: docx / xlsx / pptx / odt / ods / odp / doc / xls / ppt / rtf get
 the same rich preview as PDF. Same interaction surface: pan / zoom /
